@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ID Aplikasi Facebook kamu -->
+    <string name="facebook_app_id">1089190340049519</string>
+    <!-- Client Token: ambil di Facebook Developers → Settings → Advanced -->
+    <string name="facebook_client_token">0bf6471b3cf0804817ae89b1cb585892</string>
+    <!-- Skema untuk callback login via Custom Tab (wajib: fb + APP_ID) -->
+    <string name="fb_login_protocol_scheme">fb1089190340049519</string>
+    <!-- Theme applied to the Android Window while the process is starting when the OS's Dark Mode setting is off -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <!-- Show a splash screen on the activity. Automatically removed when
+             the Flutter engine draws its first frame -->
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+    <!-- Theme applied to the Android Window as soon as the process has started.
+         This theme determines the color of the Android Window while your
+         Flutter UI initializes, as well as behind your Flutter UI while its
+         running.
+
+         This Theme is only used starting with V2 of Flutter's Android embedding. -->
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+    </style>
+</resources>
