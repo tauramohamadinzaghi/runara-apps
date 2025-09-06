@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// === screens kamu ===
+// === Screens ===
 import 'screen/WelcomeScreen.dart';
 import 'screen/SignInScreen.dart';
 import 'screen/SignUpScreen.dart';
-import 'screen/HomePageScreen.dart'; // berisi class HomePage
-import 'screen/onboarding_role_page.dart';
-import 'core/local_store.dart';
+import 'screen/HomePageScreen.dart';
 import 'screen/ChooseRoleScreen.dart';
-import 'screen/TunanetraPageScreen.dart'; // Import the TunanetraPageScreen
+import 'screen/onboarding_role_page.dart';      // <-- satu sumber saja
+import 'screen/TunanetraPageScreen.dart';       // atau 'screen/tunanetra_page_screen.dart'
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -30,7 +30,6 @@ class MyApp extends StatelessWidget {
       navigatorKey: navigatorKey,
       theme: ThemeData(useMaterial3: true, colorScheme: const ColorScheme.dark()),
       initialRoute: '/',
-      // HANYA pakai onGenerateRoute agar tidak bentrok
       onGenerateRoute: (settings) {
         switch (settings.name) {
           case '/':
@@ -40,7 +39,6 @@ class MyApp extends StatelessWidget {
             return MaterialPageRoute(
               builder: (_) => SignInScreen(
                 onSignInClick: () {
-                  // fallback bila callback dipanggil (tidak wajib, kita juga push langsung dari SignIn)
                   navigatorKey.currentState!
                       .pushNamedAndRemoveUntil('/home', (r) => false);
                 },
@@ -52,21 +50,33 @@ class MyApp extends StatelessWidget {
             return MaterialPageRoute(builder: (_) => const SignUpScreen());
 
           case '/home':
-          // PENTING: pakai kelas HomePage (bukan HomePageScreen dummy)
             return MaterialPageRoute(builder: (_) => const HomePage());
-          case '/profile':
-          case '/settings':
+
           case '/choose-role':
             return MaterialPageRoute(builder: (_) => const ChooseRoleScreen());
+
           case '/onboarding-role':
             return MaterialPageRoute(builder: (_) => const OnboardingRolePage());
+
+          case '/tunanetra': // <<< rute untuk TunanetraPageScreen
+            return MaterialPageRoute(builder: (_) => const TunanetraPageScreen());
+
+          default:
+          // fallback aman
+            return MaterialPageRoute(
+              builder: (_) => WelcomeScreen(
+                onSignInClick: () => navigatorKey.currentState!.pushNamed('/signin'),
+              ),
+            );
         }
       },
     );
   }
 }
 
-/// Belum login → Welcome; sudah login → _RoleGate
+/// ---------------------------------------------------------------------------
+/// GATE: cek login -> cek role -> arahkan
+/// ---------------------------------------------------------------------------
 class _RootGate extends StatelessWidget {
   const _RootGate();
 
@@ -75,6 +85,9 @@ class _RootGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        }
         if (!snap.hasData) {
           return WelcomeScreen(
             onSignInClick: () => navigatorKey.currentState!.pushNamed('/signin'),
@@ -86,7 +99,6 @@ class _RootGate extends StatelessWidget {
   }
 }
 
-/// Cek role; kalau belum ada → onboarding. Jika sudah → langsung ke HomePage (file kamu).
 class _RoleGate extends StatelessWidget {
   const _RoleGate();
 
@@ -101,18 +113,24 @@ class _RoleGate extends StatelessWidget {
     }
 
     return FutureBuilder<String?>(
-      future: LocalStore.getRole(u.uid),
+      future: _loadRole(u.uid),
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
         final role = snap.data;
         if (role == null) {
+          // belum pilih role → onboarding role
           return const OnboardingRolePage();
         }
-        // LANGSUNG pakai HomePage dari file HomePageScreen.dart
+        // sudah ada role → ke home
         return const HomePage();
       },
     );
+  }
+
+  Future<String?> _loadRole(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('user_role_$uid');
   }
 }

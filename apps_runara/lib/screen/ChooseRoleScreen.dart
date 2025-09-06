@@ -15,6 +15,14 @@ class ChooseRoleScreen extends StatefulWidget {
   @override
   State<ChooseRoleScreen> createState() => _ChooseRoleScreenState();
 }
+class RolePrefs {
+  static Future<void> setRole(String role) async {
+    final prefs = await SharedPreferences.getInstance();
+    final u = FirebaseAuth.instance.currentUser;
+    final roleKey = 'user_role_${u?.uid ?? 'local'}';
+    await prefs.setString(roleKey, role);
+  }
+}
 
 class _ChooseRoleScreenState extends State<ChooseRoleScreen> {
   String? _choice; // 'relawan' atau 'tunanetra'
@@ -30,6 +38,9 @@ class _ChooseRoleScreenState extends State<ChooseRoleScreen> {
     final sp = await SharedPreferences.getInstance();
     final u = FirebaseAuth.instance.currentUser;
     final key = 'user_role_${u?.uid ?? 'local'}';
+    final prefs = await SharedPreferences.getInstance();
+    final roleKey = 'user_role_${user.uid}';
+    final roleStr = prefs.getString(roleKey);
     final exist = sp.getString(key);
     if (exist != null) {
       setState(() => _choice = exist); // pre-select jika sudah pernah milih
@@ -119,6 +130,10 @@ class _ChooseRoleScreenState extends State<ChooseRoleScreen> {
       ),
     );
   }
+}
+
+class user {
+  static var uid;
 }
 
 class _RoleCard extends StatelessWidget {

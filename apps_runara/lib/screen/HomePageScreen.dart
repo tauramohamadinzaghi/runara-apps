@@ -1,10 +1,11 @@
 // lib/screen/HomePageScreen.dart
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'TunanetraPageScreen.dart'; // Import the TunanetraPageScreen
+import 'ChooseRoleScreen.dart';
 
-
+import 'TunanetraPageScreen.dart';
 import 'auth_service.dart';
 
 /// =================== PALETTE ===================
@@ -20,6 +21,7 @@ const _divider = Color(0xFF2A3C6C);
 extension _StrX on String {
   String ifEmpty(String Function() fallback) => isEmpty ? fallback() : this;
 }
+
 class HomePageScreen extends StatefulWidget {
   final String role;
   final String name;
@@ -33,25 +35,30 @@ class HomePageScreen extends StatefulWidget {
 class _HomePageScreenState extends State<HomePageScreen> {
   int _selectedIndex = 0;
 
+  // Function to navigate based on the tab selected
   void _onItemTapped(int index) {
     setState(() {
       _selectedIndex = index;
     });
 
-    // Navigate to TunanetraPageScreen if the "Tunanetra" tab is selected
+    // Navigate to different screens based on index
     if (index == 1) {
+      // If the "Tunanetra" tab is selected, navigate to TunanetraPageScreen
       Navigator.push(
         context,
         MaterialPageRoute(builder: (context) => const TunanetraPageScreen()),
       );
     }
+    // You can add more navigation logic for other tabs (like Home, Maps, etc.)
   }
 
   @override
   Widget build(BuildContext context) {
+    // TODO: implement build
     throw UnimplementedError();
   }
 }
+
 
 /// =================== MODEL & HELPER ===================
 enum UserRole { relawan, tunanetra }
@@ -1557,23 +1564,59 @@ class _BottomNav extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          _NavButton(icon: Icons.home_rounded, label: 'Home', selected: true, onTap: onTapHome),
-          _NavButton(icon: Icons.groups_2_rounded, label: 'Tunanetra', onTap: onTapTunanetra),
-          _NavButton(icon: Icons.map_rounded, label: 'Maps', onTap: onTapMaps),
-          _NavButton(icon: Icons.chat_bubble_outline_rounded, label: 'Hubungkan', onTap: onTapChat),
-          _NavButton(icon: Icons.more_horiz_rounded, label: 'Lainnya', onTap: onTapMore),
+          _NavButton(
+            icon: Icons.home_rounded,
+            label: 'Home',
+            selected: true,
+            onTap: onTapHome,
+          ),
+          _NavButton(
+            icon: Icons.groups_2_rounded,
+            label: 'Tunanetra',
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const TunanetraPageScreen()), // Navigate to TunanetraPageScreen
+              );
+            },
+          ),
+          _NavButton(
+            icon: Icons.map_rounded,
+            label: 'Maps',
+            onTap: () {
+              // Implement navigation for Maps if needed
+            },
+          ),
+          _NavButton(
+            icon: Icons.chat_bubble_outline_rounded,
+            label: 'Hubungkan',
+            onTap: () {
+              // Implement navigation for Hubungkan if needed
+            },
+          ),
+          _NavButton(
+            icon: Icons.more_horiz_rounded,
+            label: '$defaultFirebaseAppName', // Ensure this variable is defined
+            onTap: onTapMore,
+          ),
         ],
+
       ),
     );
   }
 }
-
 class _NavButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool selected;
   final VoidCallback onTap;
-  const _NavButton({required this.icon, required this.label, required this.onTap, this.selected = false});
+  const _NavButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.selected = false,
+  });
+
   @override
   Widget build(BuildContext context) {
     final color = selected ? _accent : _subtle;
@@ -1596,6 +1639,9 @@ class _NavButton extends StatelessWidget {
     );
   }
 }
+
+// In the HomePage or Bottom Navigation logic
+
 
 /* =========================================================================
    (OPSIONAL) LEMBAR PILIHAN, BULAN, NOTIF — tetap seperti punyamu
@@ -1764,35 +1810,5 @@ class Dow extends StatelessWidget {
   }
 }
 
-/* =========================================================================
-   ALL FEATURES DATA
-   ========================================================================= */
 
-class FeatureData {
-  final String id;
-  final String title;
-  final IconData icon;
-  final String route;
-  final Color bg;
 
-  const FeatureData({
-    required this.id,
-    required this.title,
-    required this.icon,
-    required this.route,
-    required this.bg,
-  });
-}
-
-final _features = <FeatureData>[
-  FeatureData(id: 'find',       title: 'Cari Pendamping', icon: Icons.handshake,          route: '/find',       bg: const Color(0xFF3A4C86)),
-  FeatureData(id: 'schedule',   title: 'Jadwal',          icon: Icons.calendar_month,     route: '/schedule',   bg: const Color(0xFF31406B)),
-  FeatureData(id: 'messages',   title: 'Pesan',           icon: Icons.forum,              route: '/messages',   bg: const Color(0xFF2D3A60)),
-  FeatureData(id: 'tips',       title: 'Tips',            icon: Icons.lightbulb,          route: '/tips',       bg: const Color(0xFF2E5A68)),
-  FeatureData(id: 'donation',   title: 'Donasi',          icon: Icons.volunteer_activism, route: '/donation',   bg: const Color(0xFF6B3A52)),
-  FeatureData(id: 'help',       title: 'Bantuan',         icon: Icons.help_center,        route: '/help',       bg: const Color(0xFF2F4A59)),
-  FeatureData(id: 'activity',   title: 'Riwayat Aktivitas',icon: Icons.receipt_long,      route: '/activity',   bg: const Color(0xFF2F5A77)),
-  FeatureData(id: 'sos',        title: 'Permintaan Bantuan',icon: Icons.sos,              route: '/sos',        bg: const Color(0xFF5A2F49)),
-  FeatureData(id: 'profile',    title: 'Profil',          icon: Icons.account_circle,     route: '/profile',    bg: const Color(0xFF3A4C86)),
-  FeatureData(id: 'settings',   title: 'Pengaturan',      icon: Icons.settings,           route: '/settings',   bg: const Color(0xFF2C3E50)),
-];
