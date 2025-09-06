@@ -1,4 +1,5 @@
 // lib/screen/HomePageScreen.dart
+import 'package:apps_runara/screen/MapsPageScreen.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -456,7 +457,8 @@ class _HomePageState extends State<HomePage> {
         onTapHome: () {},
         onTapTunanetra: () =>
             Navigator.of(context).pushNamed('/profile', arguments: {'role': 'tunanetra'}),
-        onTapMaps: () => Navigator.of(context).pushNamed('/maps'),
+        onTapMaps: () =>
+            Navigator.of(context).pushReplacementNamed('/maps'),
         onTapChat: () => Navigator.of(context).pushNamed('/messages'),
         onTapMore: () => _showMoreSheet(context),
       ),
@@ -1584,7 +1586,10 @@ class _BottomNav extends StatelessWidget {
             icon: Icons.map_rounded,
             label: 'Maps',
             onTap: () {
-              // Implement navigation for Maps if needed
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const MapsPageScreen()),
+              );
             },
           ),
           _NavButton(

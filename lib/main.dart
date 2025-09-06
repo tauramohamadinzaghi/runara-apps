@@ -62,7 +62,7 @@ class MyApp extends StatelessWidget {
           case '/tunanetra': // <<< rute untuk TunanetraPageScreen
             return MaterialPageRoute(builder: (_) => const TunanetraPageScreen());
 
-          case '/maps': // ⬅️ rute baru
+          case '/maps': // ⬅️ ini yang bikin tombol Maps jalan
             return MaterialPageRoute(builder: (_) => const MapsPageScreen());
 
           default:
