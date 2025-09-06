@@ -1372,8 +1372,6 @@ class DayPillWidget extends StatelessWidget {
   }
 }
 
-
-
 class DatePill extends StatelessWidget {
   final String weekday;
   final int day;
