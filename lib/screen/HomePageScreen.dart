@@ -1,12 +1,17 @@
 // lib/screen/HomePageScreen.dart
 import 'package:apps_runara/screen/MapsPageScreen.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'ChooseRoleScreen.dart';
+import 'BantuanPageScreen.dart';
 
+import 'ChooseRoleScreen.dart';
 import 'TunanetraPageScreen.dart';
+
+// nav & header reusable
+import 'widget/runara_thin_nav.dart';
+import 'widget/runara_header.dart'; // RunaraHeaderSection, RunaraHeader, RunaraNotificationSheet, AppNotification
+import 'package:apps_runara/screen/CariPendampingPageScreen.dart';
 import 'auth_service.dart';
 
 /// =================== PALETTE ===================
@@ -17,6 +22,28 @@ const _accent = Color(0xFF9AA6FF);
 const _subtle = Color(0xFFBFC3D9);
 const _chipBlue = Color(0xFF22315E);
 const _divider = Color(0xFF2A3C6C);
+
+// === warna khusus section jadwal
+const _scCard   = Color(0xFF1A2A6C);
+const _scInner  = Color(0xFF2A3B8E);
+const _scOrange = Color(0xFFFF8C00);
+const _scBlue   = Color(0xFF4A90E2);
+
+// === warna Icon Navigation (match HTML)
+const _navActive     = Color(0xFF7B8AFF);   // aktif
+const _navIdle       = Color(0xFF4B5B7A);   // non-aktif
+const _navLabelIdle  = Color(0xFF8A9ABF);   // label non-aktif
+
+// === warna Kustomisasi Fitur (match HTML)
+const _cfBg          = Color(0xFF1B2543);
+const _cfTile        = Color(0xFF2E3A6E);
+const _cfBadge       = Color(0xFF3B4A7A);
+const _cfTextSubtle  = Color(0xFF9CA0B7);
+const _cfPrimary     = Color(0xFF9CA0F7);
+const _cfReset       = Color(0xFF7B5FC5);
+
+// === warna grid di pop-out "Semua Fitur"
+const _allTileBg     = Color(0xFF2E3A6E);
 
 /// ===== kecil: biar bisa pakai .ifEmpty(() => ...)
 extension _StrX on String {
@@ -34,32 +61,11 @@ class HomePageScreen extends StatefulWidget {
 }
 
 class _HomePageScreenState extends State<HomePageScreen> {
-  int _selectedIndex = 0;
-
-  // Function to navigate based on the tab selected
-  void _onItemTapped(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
-
-    // Navigate to different screens based on index
-    if (index == 1) {
-      // If the "Tunanetra" tab is selected, navigate to TunanetraPageScreen
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const TunanetraPageScreen()),
-      );
-    }
-    // You can add more navigation logic for other tabs (like Home, Maps, etc.)
-  }
-
   @override
   Widget build(BuildContext context) {
-    // TODO: implement build
-    throw UnimplementedError();
+    return const HomePage();
   }
 }
-
 
 /// =================== MODEL & HELPER ===================
 enum UserRole { relawan, tunanetra }
@@ -92,6 +98,7 @@ class UserProfile {
   String get roleLabel => role == UserRole.relawan ? 'Relawan' : 'Tunanetra';
 }
 
+
 String greetingIndo(DateTime now) {
   final h = now.hour;
   if (h >= 5 && h < 11) return 'Selamat pagi';
@@ -111,28 +118,28 @@ String greetingEmoji(DateTime now) {
 String formatKcal(double v) => v <= 0 ? '–' : '${v.toStringAsFixed(0)} Kcal';
 String formatKm(double v) => v <= 0 ? '–' : '${v.toStringAsFixed(1)} Km';
 
-DateTime startOfWeek(DateTime d) {
-  // 1 = Mon ... 7 = Sun → balik ke Senin
-  final wd = d.weekday;
-  final onlyDate = DateTime(d.year, d.month, d.day);
-  return onlyDate.subtract(Duration(days: wd - 1));
-}
+String formatDateId(DateTime d) =>
+    '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
 bool isSameDay(DateTime a, DateTime b) =>
     a.year == b.year && a.month == b.month && a.day == b.day;
 
+/* ====== Jadwal Model ====== */
+class AssistSchedule {
+  final DateTime date; // tanggal agenda
+  final String start;
+  final String end;
+  final String place;
+  final String rolePill; // 'Tunanetra' atau 'Relawan'
+  final String personName;
 
-/// =================== NOTIF MODEL ===================
-class AppNotification {
-  final String title;
-  final String body;
-  final DateTime time;
-  bool read;
-  AppNotification({
-    required this.title,
-    required this.body,
-    required this.time,
-    this.read = false,
+  const AssistSchedule({
+    required this.date,
+    required this.start,
+    required this.end,
+    required this.place,
+    required this.rolePill,
+    required this.personName,
   });
 }
 
@@ -143,58 +150,106 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-
-  UserProfile? user;                  // ⬅️ nullable biar aman
+  UserProfile? user;
   double totalCalories = 0;
   double totalDistance = 0;
   int sessionsPerWeek = 2;
   DateTime selectedDate = DateTime.now();
 
-  final List<AppNotification> _notifs = [];
+  final List<AppNotification> _notifs = []; // dari runara_header.dart
   bool get _hasUnread => _notifs.any((n) => !n.read);
 
-  late DateTime _stripStart; // anchor awal minggu (Senin)
-  // di dalam _HomePageState
+  // ===== Quick Feature (untuk “Kustomisasi Fitur”)
   static const _quickKey = 'quick_priority_ids';
   static const _maxQuick = 4;
-// default 4 fitur (boleh kamu ubah)
-  static const List<String> _defaultQuickIds = ['find', 'activity', 'sos', 'settings'];
+  // DEFAULT prioritas (tidak termasuk "Semua" karena "Semua" selalu ada)
+  static const List<String> _defaultQuickIds = [
+    'matchmaking', 'history', 'sos', 'settings'
+  ];
+  List<String> _quickIds = []; // disimpan ke SharedPreferences
 
-  List<String> _quickIds = []; // id fitur yg tampil di baris Home (selain "All")
+  // Helper: sanitize daftar id fitur agar aman (hapus yang tidak dikenal/duplikat & batasi 4)
+  List<String> _sanitizeQuick(List<String> ids) {
+    final seen = <String>{};
+    final out = <String>[];
+    for (final id in ids) {
+      if (seen.contains(id)) continue;
+      if (!kAllFeatures.any((f) => f.id == id)) continue;
+      out.add(id);
+      seen.add(id);
+      if (out.length >= _maxQuick) break;
+    }
+    return out;
+  }
+
+  // ===== Demo data jadwal (generate per tanggal) =====
+  List<AssistSchedule> _schedulesFor(DateTime d) {
+    final date = DateTime(d.year, d.month, d.day);
+
+    final tunanetraNames = ['Aldy Giovani', 'Sinta Dewi', 'Bima Pratama', 'Laras Sekar'];
+    final relawanNames   = ['Raka Maulana', 'Hilda Afiah', 'Anwar Ramzi', 'Nadia Putri'];
+    final places = ['Gelora Bung Karno', 'Lapangan Saparua', 'Stadion Jalak Harupat', 'GOR Pajajaran'];
+
+    final idx = (date.millisecondsSinceEpoch ~/ (1000 * 60 * 60 * 24)) % 4;
+    final isWeekend = date.weekday == DateTime.saturday || date.weekday == DateTime.sunday;
+
+    final List<AssistSchedule> list = [];
+    list.add(AssistSchedule(
+      date: date,
+      start: '06:20',
+      end: '07:30',
+      place: places[idx],
+      rolePill: 'Tunanetra',
+      personName: tunanetraNames[idx],
+    ));
+    if (!isWeekend) {
+      list.add(AssistSchedule(
+        date: date,
+        start: '16:30',
+        end: '17:45',
+        place: places[(idx + 1) % places.length],
+        rolePill: 'Relawan',
+        personName: relawanNames[idx],
+      ));
+    }
+    return list;
+  }
 
   @override
   void initState() {
     super.initState();
     selectedDate = DateTime.now();
-    _stripStart = _startOfWeek(selectedDate);
     _initUserThenNotifications();
-  }
-
-
-  /// Senin sebagai awal minggu
-  DateTime _startOfWeek(DateTime d) {
-    final base = DateTime(d.year, d.month, d.day);
-    return base.subtract(Duration(days: base.weekday - DateTime.monday));
   }
 
   Future<void> _initUserThenNotifications() async {
     final u = FirebaseAuth.instance.currentUser;
 
-    // nama yang ditampilkan
     String name = (u?.displayName ?? '').trim();
     if (name.isEmpty) {
       final email = (u?.email ?? '').trim();
       name = email.isNotEmpty ? email.split('@').first : 'User';
     }
 
-    // ambil role dari SharedPreferences
     final prefs = await SharedPreferences.getInstance();
     final roleKey = 'user_role_${u?.uid ?? 'local'}';
     final roleStr = prefs.getString(roleKey) ?? 'relawan';
     final role = roleStr == 'tunanetra' ? UserRole.tunanetra : UserRole.relawan;
     user = UserProfile(name: name, role: role, level: 0, xp: 0);
 
-    // === Welcome hanya 1x untuk user baru ===
+    // load quick features (jika ada) + SANITIZE + default fallback
+    final loaded = prefs.getStringList(_quickKey);
+    if (loaded == null || loaded.isEmpty) {
+      _quickIds = List<String>.from(_defaultQuickIds);
+      await prefs.setStringList(_quickKey, _quickIds);
+    } else {
+      final cleaned = _sanitizeQuick(loaded);
+      _quickIds = cleaned.isEmpty ? List<String>.from(_defaultQuickIds) : cleaned;
+      if (cleaned.length != loaded.length) {
+        await prefs.setStringList(_quickKey, _quickIds);
+      }
+    }
+
     final seenKey = 'seen_welcome_${u?.uid ?? 'local'}';
     final meta = u?.metadata;
     final isNewSignUp = meta != null &&
@@ -213,13 +268,10 @@ class _HomePageState extends State<HomePage> {
       await prefs.setBool(seenKey, true);
     }
 
-    // Contoh notif lain (biar nggak kosong)
     _seedDemoNotifications();
-
     if (mounted) setState(() {});
   }
 
-// beberapa notif contoh (boleh kamu ganti/hapus nanti)
   void _seedDemoNotifications() {
     if (_notifs.isEmpty) {
       _notifs.addAll([
@@ -245,8 +297,8 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _pickSessions() {}
 
-  void _pickSessions() async { /* ... punyamu ... */ }
   Future<void> _openMonthCalendar() async {
     final picked = await showModalBottomSheet<DateTime>(
       context: context,
@@ -255,56 +307,143 @@ class _HomePageState extends State<HomePage> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => _MonthCalendarSheet(
-        initial: selectedDate,
-      ),
+      builder: (ctx) => _MonthCalendarSheet(initial: selectedDate),
     );
 
     if (picked != null && mounted) {
       setState(() {
         selectedDate = picked;
-        _stripStart = _startOfWeek(picked); // sync strip ke minggu tanggal terpilih
       });
     }
   }
 
-  void _simulateMissionDone() => setState(() => user?.addXp(30));
-
+  // ⬇️ gunakan sheet reusable dari runara_header.dart
   Future<void> _openNotifications() async {
-    // buka bottom sheet dan tunggu closed; return true kalau ada perubahan
-    final changed = await showModalBottomSheet<bool>(
+    final changed = await RunaraNotificationSheet.show(
+      context,
+      notifs: _notifs,
+      onMarkAllRead: () {
+        for (final n in _notifs) n.read = true;
+      },
+      onTapItem: (i) => _notifs[i].read = true,
+
+    );
+    if (changed == true && mounted) setState(() {});
+  }
+
+  // ======== state untuk Icon Navigation (aktif index) — 0 = "Semua"
+  int _activeIconIndex = 0;
+
+  void _openFeature(FeatureDef f) {
+    switch (f.id) {
+      case 'matchmaking':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const CariPendampingPageScreen()),
+        );
+        break;
+      case 'help':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const BantuanPageScreen()),
+        );
+        break;
+
+    // Contoh lain (kalau nanti ada halamannya):
+    // case 'messages': Navigator.pushNamed(context, '/messages'); break;
+
+      default:
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fitur ${f.label.replaceAll('\n', ' ')} belum tersedia.'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(milliseconds: 900),
+          ),
+        );
+    }
+  }
+
+  // ======== handler tombol Ubah di kanan "Fitur Runara"
+  Future<void> _onEditFeatures() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = await showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _cfBg,
+      barrierColor: Colors.black54,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => _CustomizeFeaturesSheet(
+        initialSelected: _quickIds,
+        maxSelected: _maxQuick,
+      ),
+    );
+
+    if (saved != null) {
+      final cleaned = _sanitizeQuick(saved); // SANITIZE sebelum simpan
+      await prefs.setStringList(_quickKey, cleaned);
+      setState(() {
+        _quickIds = cleaned;
+        final totalCount = 1 + _quickIds.length; // +1 karena "Semua" selalu ada
+        if (_activeIconIndex >= totalCount) _activeIconIndex = 0;
+      });
+    }
+  }
+
+  // ======== POP-OUT: Semua Fitur (setengah layar)
+  void _openAllFeatures() {
+    showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: _cardBlue,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (ctx) => _NotificationSheet(
-        notifs: _notifs,
-        onMarkAllRead: () {
-          for (final n in _notifs) { n.read = true; }
-        },
-        onTapItem: (i) {
-          _notifs[i].read = true;
-        },
+      builder: (ctx) => FractionallySizedBox(
+        heightFactor: 0.55,
+        child: _AllFeaturesSheet(
+          features: kAllFeatures,
+          onTap: (f) {
+            Navigator.pop(ctx);
+            Future.microtask(() => _openFeature(f));
+          },
+        ),
       ),
     );
-
-    if (changed == true && mounted) setState(() {}); // refresh titik merah
   }
 
   @override
   Widget build(BuildContext context) {
-    final topPad = MediaQuery.of(context).padding.top;
     final kcalText = formatKcal(totalCalories);
     final kmText = formatKm(totalDistance);
     final u = user;
+
+    // map id -> FeatureDef (pertahankan urutan _quickIds)
+    List<FeatureDef> _mapIdsToFeatures(List<String> ids) {
+      final out = <FeatureDef>[];
+      for (final id in ids) {
+        final idx = kAllFeatures.indexWhere((f) => f.id == id);
+        if (idx != -1) out.add(kAllFeatures[idx]);
+      }
+      return out;
+    }
+
+    final selectedFeatures = _mapIdsToFeatures(_quickIds);
+    int navActive = _activeIconIndex;
+    final totalCount = 1 + selectedFeatures.length; // +1 untuk "Semua"
+    if (navActive >= totalCount) navActive = 0;
+
+    // Judul dinamis: Hari ini vs tanggal terpilih
+    final bool today = isSameDay(selectedDate, DateTime.now());
+    final String scheduleTitle =
+    today ? 'Jadwal Pendampingan Hari Ini' : 'Jadwal Pendampingan • ${formatDateId(selectedDate)}';
+
+    // Ambil jadwal untuk tanggal terpilih
+    final schedules = _schedulesFor(selectedDate);
 
     return Scaffold(
       backgroundColor: _bgBlue,
       body: Stack(
         children: [
-          // background
           Positioned.fill(
             child: Image.asset(
               'assets/bg_space.png',
@@ -312,30 +451,25 @@ class _HomePageState extends State<HomePage> {
               errorBuilder: (_, __, ___) => const SizedBox.shrink(),
             ),
           ),
-
-          // content
           SafeArea(
             bottom: false,
             child: CustomScrollView(
               slivers: [
-                // ======= Header
+                // ===== Header seragam via wrapper =====
                 SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(20, topPad > 0 ? 8 : 16, 20, 12),
-                    child: _Header(
-                      greeting: greetingIndo(DateTime.now()),
-                      emoji: greetingEmoji(DateTime.now()),
-                      userName: u?.name ?? '—',
-                      roleLabel: u?.roleLabel ?? 'Relawan',
-                      level: u?.shownLevel ?? 0,
-                      progress: u?.progress ?? 0,
-                      hasUnread: _hasUnread,
-                      onTapBell: _openNotifications,
-                    ),
+                  child: RunaraHeaderSection(
+                    greeting: greetingIndo(DateTime.now()),
+                    emoji: greetingEmoji(DateTime.now()),
+                    userName: u?.name ?? '—',
+                    roleLabel: u?.roleLabel ?? 'Relawan',
+                    level: u?.shownLevel ?? 0,
+                    progress: u?.progress ?? 0,
+                    hasUnread: _hasUnread,
+                    onTapBell: _openNotifications,
                   ),
                 ),
 
-                // ======= Judul "Fitur" + tombol All
+                // ===== Section title + tombol Ubah
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
@@ -350,12 +484,49 @@ class _HomePageState extends State<HomePage> {
                           ),
                         ),
                         const Spacer(),
+                        FilledButton(
+                          onPressed: _onEditFeatures,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _accent,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.edit_outlined, size: 16),
+                              SizedBox(width: 6),
+                              Text('Ubah'),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
                   ),
                 ),
 
-                // ======= Stats
+                // ===== Icon Navigation (Semua + DINAMIS)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+                    child: _FeatureIconNav(
+    features: selectedFeatures,
+    activeIndex: navActive,
+    onTap: (i) {
+    if (i == 0) {
+    _openAllFeatures();                 // buka sheet "Semua"
+    } else {
+    _openFeature(selectedFeatures[i - 1]); // langsung navigate sesuai fitur
+    }
+                      },
+                    ),
+                  ),
+                ),
+
+
+                // ===== Stats
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -363,7 +534,7 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
 
-                // ======= Info cards
+                // ===== Info cards
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -374,305 +545,178 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
 
-                // ======= Jadwal hari ini (judul + ikon kalender)
+                // ====== Jadwal ======
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
-                    child: Row(
+                    child: _ScheduleHeaderRow(
+                      titleText: scheduleTitle,
+                      onTapCalendar: _openMonthCalendar,
+                    ),
+                  ),
+                ),
+
+                // Date scroller: BLOK 5 HARI
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: _FiveDayScroller(
+                      selected: selectedDate,
+                      onSelect: (d) => setState(() => selectedDate = d),
+                    ),
+                  ),
+                ),
+
+                // ==== render semua jadwal utk tanggal terpilih ====
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
                       children: [
-                        Expanded(
-                          child: Text(
-                            'Jadwal Pendampingan Hari Ini',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(.95),
-                              fontWeight: FontWeight.w800,
-                              fontSize: 16,
+                        if (schedules.isEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(vertical: 28),
+                            alignment: Alignment.center,
+                            child: const Text(
+                              'Tidak ada jadwal.',
+                              style: TextStyle(color: Colors.white70),
                             ),
                           ),
-                        ),
-                        IconButton(
-                          tooltip: 'Buka kalender bulan ini',
-                          onPressed: _openMonthCalendar,
-                          icon: const Icon(Icons.calendar_month_rounded, color: Colors.white),
-                        ),
+                        for (final s in schedules) ...[
+                          _ScheduleCardNew(start: s.start, end: s.end, place: s.place),
+                          const SizedBox(height: 12),
+                          _PartnerCardRail(
+                            rolePill: s.rolePill,
+                            name: s.personName,
+                            buttonDisabledText: 'Pantau lokasi',
+                          ),
+                          const SizedBox(height: 20),
+                        ],
                       ],
                     ),
                   ),
                 ),
 
-                // ======= Date strip (selalu 7 hari)
-                SliverToBoxAdapter(
-                  child: _DateStrip(
-                    stripStart: _stripStart,
-                    selected: selectedDate,
-                    onSelect: (d) {
-                      setState(() {
-                        selectedDate = d;
-                        final last = _stripStart.add(const Duration(days: 6));
-                        if (d.isBefore(_stripStart) || d.isAfter(last)) {
-                          _stripStart = _startOfWeek(d);
-                        }
-                      });
-                    },
-                    onPrevWeek: () => setState(() {
-                      _stripStart = _stripStart.subtract(const Duration(days: 7));
-                      selectedDate = _stripStart; // opsional: snap ke Senin minggu tsb
-                    }),
-                    onNextWeek: () => setState(() {
-                      _stripStart = _stripStart.add(const Duration(days: 7));
-                      selectedDate = _stripStart; // opsional
-                    }),
-                    onPullDown: _openMonthCalendar, // tarik ke bawah hanya di strip ini
-                  ),
-                ),
-
-                // ======= Kartu jadwal
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                    child: GestureDetector(
-                      onLongPress: _simulateMissionDone,
-                      child: const _ScheduleCard(),
-                    ),
-                  ),
-                ),
-                // ======= Kartu partner
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(16, 10, 16, 28),
-                    child: _PartnerCard(),
-                  ),
-                ),
-
-                const SliverPadding(padding: EdgeInsets.only(bottom: 140)), // anti overflow
+                const SliverPadding(padding: EdgeInsets.only(bottom: 140)),
               ],
-
             ),
           ),
         ],
       ),
 
-      // bottom nav
-      bottomNavigationBar: _BottomNav(
-        onTapHome: () {},
-        onTapTunanetra: () =>
-            Navigator.of(context).pushNamed('/profile', arguments: {'role': 'tunanetra'}),
-        onTapMaps: () =>
-            Navigator.of(context).pushReplacementNamed('/maps'),
-        onTapChat: () => Navigator.of(context).pushNamed('/messages'),
-        onTapMore: () => _showMoreSheet(context),
-      ),
+      // === Bottom Nav tipis (RunaraThinNav)
+      bottomNavigationBar: const RunaraThinNav(current: AppTab.home),
     );
   }
-
-  void _showMoreSheet(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF152449),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(width: 44, height: 5,
-                  decoration: BoxDecoration(color: Colors.white24,
-                      borderRadius: BorderRadius.circular(3))),
-              const SizedBox(height: 12),
-              ListTile(
-                leading: const Icon(Icons.logout_rounded, color: Colors.redAccent),
-                title: const Text('Keluar', style: TextStyle(color: Colors.redAccent)),
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  await FirebaseAuth.instance.signOut();
-                  if (context.mounted) {
-                    Navigator.of(context).pushNamedAndRemoveUntil('/signin', (_) => false);
-                  }
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showAllFeaturesSheet(BuildContext context) {}
 }
+class _FeatureIconNav extends StatelessWidget {
+  final List<FeatureDef> features; // List of dynamic features
+  final int activeIndex;           // The active index (0 = "Semua")
+  final ValueChanged<int> onTap;   // The onTap callback
 
-class _NotificationSheet extends StatelessWidget {
-  final List<AppNotification> notifs;
-  final VoidCallback onMarkAllRead;
-  final void Function(int index) onTapItem;
-
-  const _NotificationSheet({
-    required this.notifs,
-    required this.onMarkAllRead,
-    required this.onTapItem,
+  const _FeatureIconNav({
+    required this.features,
+    required this.activeIndex,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    final maxH = MediaQuery.of(context).size.height * 0.9;
-    final hasWelcomeUnread = notifs.any((n) =>
-    !n.read && n.title.toLowerCase().contains('selamat datang'));
-
-    return SafeArea(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: maxH),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // drag handle
-              Container(
-                width: 44, height: 5,
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(3),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // header + mark all
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Notifikasi',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      onMarkAllRead();
-                      Navigator.of(context).pop(true); // tutup & minta refresh
-                    },
-                    child: const Text('Tandai semua dibaca'),
-                  ),
-                ],
-              ),
-
-              // banner welcome (opsional)
-              if (hasWelcomeUnread) ...[
-                _WelcomeBanner(onTap: () {
-                  // contoh aksi: buka halaman fitur
-                  Navigator.of(context).pop(true);
-                  Navigator.of(context).pushNamed('/features');
-                }),
-                const SizedBox(height: 10),
-              ],
-
-              // daftar notifikasi
-              Expanded(
-                child: notifs.isEmpty
-                    ? const Center(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 40),
-                    child: Text('Tidak ada notifikasi.',
-                        style: TextStyle(color: Colors.white70)),
-                  ),
-                )
-                    : ListView.separated(
-                  itemCount: notifs.length,
-                  separatorBuilder: (_, __) =>
-                  const Divider(height: 1, color: Colors.white12),
-                  itemBuilder: (ctx, i) {
-                    final n = notifs[i];
-                    final icon = n.read
-                        ? Icons.notifications_none
-                        : Icons.circle_notifications;
-                    final color =
-                    n.read ? Colors.white60 : _accent;
-
-                    return ListTile(
-                      onTap: () {
-                        onTapItem(i);               // tandai read
-                        Navigator.pop(ctx, true);   // tutup & refresh
-                      },
-                      leading: Icon(icon, color: color),
-                      title: Text(
-                        n.title,
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(.95),
-                          fontWeight:
-                          n.read ? FontWeight.w600 : FontWeight.w800,
-                        ),
-                      ),
-                      subtitle: Text(
-                        n.body,
-                        style: const TextStyle(color: _subtle),
-                      ),
-                      trailing: Text(
-                        _fmtTime(n.time),
-                        style: const TextStyle(
-                            color: _subtle, fontSize: 12),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        // "Semua" (tetap ada)
+        _IconTile(
+          label: 'Semua',
+          isActive: activeIndex == 0,
+          offsetY: -2, // if you want to align with other tiles, change it to -7
+          child: const Icon(Icons.grid_view_rounded, color: Colors.white, size: 28),
+          onTap: () => onTap(0), // Call onTap with index 0 for "Semua"
         ),
-      ),
+
+        // Dynamic feature tiles
+        for (int i = 0; i < features.length; i++)
+          _IconTile(
+            label: features[i].label,
+            isActive: activeIndex == i + 1,
+            offsetY: -7, // Keeping consistent offset for dynamic features
+            child: features[i].mono != null
+                ? Text(
+              features[i].mono!,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 18),
+            )
+                : Icon(features[i].icon ?? Icons.circle, color: Colors.white, size: 28),
+            onTap: () => onTap(i + 1), // Pass the feature index here
+          ),
+      ],
     );
   }
-
-  static String _fmtTime(DateTime t) =>
-      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 }
 
-
-
-// Banner cheerfull di atas list
-class _WelcomeBanner extends StatelessWidget {
+class _IconTile extends StatelessWidget {
+  final String label;
+  final bool isActive;
+  final Widget child;
+  final double offsetY; // offset vertikal tile (negatif = naik)
   final VoidCallback onTap;
-  const _WelcomeBanner({required this.onTap});
+
+  const _IconTile({
+    required this.label,
+    required this.isActive,
+    required this.child,
+    this.offsetY = 0,
+    required this.onTap,
+  });
+
+  static const double _labelBoxHeight = 30; // 2 baris @ fontSize 12, height 1.25
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(16),
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          gradient: const LinearGradient(
-            colors: [Color(0xFF5B6CFF), Color(0xFF9AA6FF)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)],
-        ),
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: const [
-            CircleAvatar(
-              radius: 22,
-              backgroundColor: Colors.white24,
-              child: Text('🎉', style: TextStyle(fontSize: 20)),
+    final Color bg = isActive ? _navActive : _navIdle;
+    final Color textColor = isActive ? Colors.white : _navLabelIdle;
+
+    return SizedBox(
+      width: 64, // w-16
+      child: Transform.translate(
+        offset: Offset(0, offsetY),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Kotak ikon tetap 64x64 — tidak berubah
+            InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(20),
+              child: Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                alignment: Alignment.center,
+                child: child,
+              ),
             ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Selamat datang di RUNARA!\nKetuk untuk melihat semua fitur.',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w800,
-                  height: 1.2,
+            const SizedBox(height: 8),
+            // Label dikunci tingginya supaya 1/2 baris tidak mengubah layout
+            SizedBox(
+              height: _labelBoxHeight,
+              child: Center(
+                child: Text(
+                  label,
+                  softWrap: true,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: textColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900, // Inter 700 ~ tebal
+                    height: 1.25,
+                  ),
                 ),
               ),
             ),
-            Icon(Icons.chevron_right, color: Colors.white),
           ],
         ),
       ),
@@ -682,211 +726,335 @@ class _WelcomeBanner extends StatelessWidget {
 
 
 /* =========================================================================
-   UI PIECES (header, quick actions, stats, cards, nav, dll)
+   KUSTOMISASI FITUR — Bottom Sheet (tanpa status bar dekoratif)
    ========================================================================= */
-class _Header extends StatelessWidget {
 
-  final String greeting;
-  final String emoji;
-  final String userName;
-  final String roleLabel;
-  final int level;
-  final double progress;
-  final bool hasUnread;
-  final VoidCallback onTapBell;
-
-  const _Header({
-    required this.greeting,
-    required this.emoji,
-    required this.userName,
-    required this.roleLabel,
-    required this.level,
-    required this.progress,
-    required this.hasUnread,
-    required this.onTapBell,
+class _CustomizeFeaturesSheet extends StatefulWidget {
+  final List<String> initialSelected;
+  final int maxSelected;
+  const _CustomizeFeaturesSheet({
+    required this.initialSelected,
+    required this.maxSelected,
   });
 
-
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _cardBlue.withOpacity(.7),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Avatar
-          Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white24, width: 2),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Image.asset(
-              'assets/avatar.png',
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
-                color: _divider,
-                alignment: Alignment.center,
-                child: Text(
-                  userName.isNotEmpty ? userName[0].toUpperCase() : '?',
-                  style: const TextStyle(
-                      fontSize: 22, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-
-          // Greeting & name
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // greeting + emoji
-                Row(
-                  children: [
-                    Text(
-                      greeting,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(emoji, style: const TextStyle(fontSize: 16)),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      userName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                        height: 1.1,
-                      ),
-                    ),
-                    _Badge(text: roleLabel),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                // Level progress
-                Row(
-                  children: [
-                    const Icon(Icons.shield_moon, size: 16, color: _subtle),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Stack(
-                        children: [
-                          Container(
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: Colors.white12,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                          ),
-                          LayoutBuilder(
-                            builder: (context, c) => Container(
-                              height: 8,
-                              width: c.maxWidth * progress.clamp(0, 1),
-                              decoration: BoxDecoration(
-                                color: _accent,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Text('LV.$level',
-                        style: const TextStyle(
-                            color: _subtle, fontWeight: FontWeight.w700)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(width: 10),
-
-          // bell with badge
-          InkWell(
-            onTap: onTapBell,
-            borderRadius: BorderRadius.circular(12),
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: Colors.white10,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child:
-                  const Icon(Icons.notifications_none, color: Colors.white),
-                ),
-                // ganti Stack kecil di icon lonceng:
-                if (hasUnread)
-                  Positioned(
-                    right: -3,
-                    top: -3,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                      decoration: const BoxDecoration(
-                        color: Colors.redAccent,
-                        borderRadius: BorderRadius.all(Radius.circular(10)),
-                      ),
-                      child: const Text('•', // atau angka jika kamu ikutkan count
-                          style: TextStyle(color: Colors.white, fontSize: 12, height: 1)),
-                    ),
-                  )
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  State<_CustomizeFeaturesSheet> createState() => _CustomizeFeaturesSheetState();
 }
 
-class _Badge extends StatelessWidget {
-  final String text;
-  const _Badge({required this.text});
+class _CustomizeFeaturesSheetState extends State<_CustomizeFeaturesSheet> {
+  late List<String> _selected; // prioritas
+  List<FeatureDef> get _all => kAllFeatures; // tidak ada "Semua" di sini
+
+  @override
+  void initState() {
+    super.initState();
+    // SANITIZE initialSelected (hapus id tak dikenal/duplikat dan batasi max)
+    final seen = <String>{};
+    _selected = widget.initialSelected.where((id) {
+      final exists = _all.any((f) => f.id == id);
+      if (!exists) return false;
+      if (seen.contains(id)) return false;
+      if (seen.length >= widget.maxSelected) return false;
+      seen.add(id);
+      return true;
+    }).toList();
+  }
+
+  void _toggleAdd(String id) {
+    if (_selected.contains(id)) return;
+    if (_selected.length >= widget.maxSelected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Maksimal ${widget.maxSelected} fitur prioritas.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    setState(() => _selected.add(id));
+  }
+
+  void _remove(String id) {
+    setState(() => _selected.remove(id));
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      margin: const EdgeInsets.only(left: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF3A4C86),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 11,
-          fontWeight: FontWeight.w800,
-          height: 1.1,
+    // fitur non-prioritas
+    final nonSelected = _all.where((f) => !_selected.contains(f.id)).toList();
+
+    final maxHeight = MediaQuery.of(context).size.height * 0.92;
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              // Drag handle
+              const SizedBox(height: 8),
+              Container(
+                width: 64, height: 6,
+                decoration: BoxDecoration(color: _cfBadge, borderRadius: BorderRadius.circular(999)),
+              ),
+              const SizedBox(height: 14),
+
+              // Body
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: [
+                    const Text('Kustomisasi Fitur',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 20)),
+                    const SizedBox(height: 8),
+                    const Text('Ketuk untuk memindahkan. Maks 4 di bagian Prioritas.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: _cfTextSubtle, fontSize: 13)),
+                    const SizedBox(height: 20),
+
+                    // PRIORITAS
+                    Row(
+                      children: const [
+                        Text('Prioritas (tampil di Home)',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: _cfBadge),
+                        borderRadius: BorderRadius.circular(12),
+                        color: _cfBg,
+                      ),
+                      child: _selected.isEmpty
+                          ? const Center(
+                        child: Text('Belum ada fitur prioritas', style: TextStyle(color: _cfTextSubtle, fontSize: 13)),
+                      )
+                          : Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: _selected
+                            .where((id) => _all.any((e) => e.id == id))
+                            .map((id) {
+                          final f = _all.firstWhere((e) => e.id == id,
+                              orElse: () => FeatureDef(id: id, label: id));
+                          return _PrioritySquare(
+                            feature: f,
+                            onRemove: () => _remove(id),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+
+                    // NON-PRIORITAS
+                    Row(
+                      children: const [
+                        Text('Non-Prioritas',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    GridView.count(
+                      crossAxisCount: 4,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      mainAxisSpacing: 12,
+                      crossAxisSpacing: 12,
+                      children: nonSelected.map((f) {
+                        return _AddSquare(
+                          feature: f,
+                          onAdd: () => _toggleAdd(f.id),
+                        );
+                      }).toList(),
+                    ),
+
+                    // Footer buttons
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        TextButton(
+                          onPressed: () => setState(() => _selected.clear()),
+                          child: const Text('Reset', style: TextStyle(color: _cfReset, fontSize: 14)),
+                        ),
+                        ElevatedButton(
+                          onPressed: () {
+                            Navigator.pop(context, _selected);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _cfPrimary,
+                            foregroundColor: Colors.white,
+                            shape: const StadiumBorder(),
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                            textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          ),
+                          child: const Text('Simpan'),
+                        )
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// Stats
+class FeatureDef {
+  final String id;
+  final String label;       // gunakan \n untuk dua baris
+  final IconData? icon;
+  final String? mono;       // bila ingin menampilkan teks besar "SOS"
+  const FeatureDef({required this.id, required this.label, this.icon, this.mono});
+}
+
+// === Semua fitur yang dapat dipilih di kustomisasi (TANPA "Semua")
+const List<FeatureDef> kAllFeatures = [
+  FeatureDef(id: 'matchmaking', label: 'Cari\nPendamping', icon: Icons.handshake_outlined),
+  FeatureDef(id: 'messages',    label: 'Pesan',               icon: Icons.chat_bubble_outline),
+  FeatureDef(id: 'tips',        label: 'Tips',                icon: Icons.lightbulb_outline),
+  FeatureDef(id: 'donation',    label: 'Donasi',              icon: Icons.volunteer_activism_outlined),
+  FeatureDef(id: 'help',        label: 'Bantuan',             icon: Icons.help_outline),
+  FeatureDef(id: 'history',     label: 'Riwayat\nAktivitas',  icon: Icons.receipt_long_outlined),
+  FeatureDef(id: 'sos',         label: 'Permintaan\nBantuan', mono: 'SOS'),
+  FeatureDef(id: 'settings',    label: 'Pengaturan',          icon: Icons.settings_outlined),
+];
+
+class _AddSquare extends StatelessWidget {
+  final FeatureDef feature;
+  final VoidCallback onAdd;
+  const _AddSquare({required this.feature, required this.onAdd});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onAdd,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        decoration: BoxDecoration(
+          color: _cfTile,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              right: 0, top: 0,
+              child: Container(
+                width: 24, height: 24,
+                decoration: const BoxDecoration(
+                  color: _cfBadge,
+                  borderRadius: BorderRadius.only(bottomLeft: Radius.circular(12)),
+                ),
+                alignment: Alignment.center,
+                child: const Text('+', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+              ),
+            ),
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (feature.mono != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(feature.mono!, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800)),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Icon(feature.icon ?? Icons.circle, color: Colors.white, size: 22),
+                      ),
+                    Text(
+                      feature.label,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 11, height: 1.1),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PrioritySquare extends StatelessWidget {
+  final FeatureDef feature;
+  final VoidCallback onRemove;
+  const _PrioritySquare({required this.feature, required this.onRemove});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onRemove,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 72, height: 72,
+        decoration: BoxDecoration(
+          color: _cfTile,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              right: 0, top: 0,
+              child: Container(
+                width: 22, height: 22,
+                decoration: const BoxDecoration(
+                  color: _cfBadge,
+                  borderRadius: BorderRadius.only(bottomLeft: Radius.circular(12)),
+                ),
+                alignment: Alignment.center,
+                child: const Text('–', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800)),
+              ),
+            ),
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (feature.mono != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(feature.mono!, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Icon(feature.icon ?? Icons.circle, color: Colors.white, size: 20),
+                      ),
+                    Text(
+                      feature.label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontSize: 10, height: 1.05, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/* =========================================================================
+   UI PIECES LAIN
+   ========================================================================= */
+
 class _StatsRow extends StatelessWidget {
   final String kcalText;
   final String kmText;
@@ -973,7 +1141,6 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-/// Two Info Cards
 class _TwoInfoCards extends StatelessWidget {
   final VoidCallback onTapSchedule;
   final String scheduleSubtitle;
@@ -1002,7 +1169,7 @@ class _TwoInfoCards extends StatelessWidget {
             title: 'Jadwal\nPendampingan',
             subtitle: '',
             icon: Icons.calendar_month_rounded,
-            dynamicSubtitle: null, // diganti di bawah
+            dynamicSubtitle: null,
             onTap: null,
           ).copyWith(
             onTap: onTapSchedule,
@@ -1112,226 +1279,170 @@ class _InfoCard extends StatelessWidget {
   }
 }
 
-class _DateStrip extends StatefulWidget {
-  final DateTime stripStart;  // Start of the current week (Monday)
-  final DateTime selected;    // Selected date
-  final ValueChanged<DateTime> onSelect;
-  final VoidCallback onPrevWeek;
-  final VoidCallback onNextWeek;
-  final VoidCallback onPullDown;  // Pull down to open calendar
-
-  const _DateStrip({
-    required this.stripStart,
-    required this.selected,
-    required this.onSelect,
-    required this.onPrevWeek,
-    required this.onNextWeek,
-    required this.onPullDown,
-  });
-
-  @override
-  State<_DateStrip> createState() => _DateStripState();
-}
-
-class _ArrowBtn extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _ArrowBtn({required this.icon, required this.onTap});
+/* ===================== HEADER ROW (Jadwal) ===================== */
+class _ScheduleHeaderRow extends StatelessWidget {
+  final String titleText;
+  final VoidCallback onTapCalendar;
+  const _ScheduleHeaderRow({required this.titleText, required this.onTapCalendar});
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 28,
-        height: 48,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.white10,
-          borderRadius: BorderRadius.circular(12),
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            titleText,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+            ),
+          ),
         ),
-        child: Icon(icon, color: Colors.white),
-      ),
+        IconButton(
+          tooltip: 'Kalender',
+          onPressed: onTapCalendar,
+          icon: const Icon(Icons.calendar_today_rounded, color: Colors.white),
+        ),
+      ],
     );
+
   }
 }
 
-class _DateStripState extends State<_DateStrip> {
-  double _pull = 0;
+/* ===================== DATE SCROLLER: blok 5 hari ===================== */
+class _FiveDayScroller extends StatelessWidget {
+  final DateTime selected;
+  final ValueChanged<DateTime> onSelect;
+  const _FiveDayScroller({required this.selected, required this.onSelect});
 
-  late double _calendarPosition; // Track vertical drag for swipe down action
+  static int _daysInMonth(DateTime d) => DateUtils.getDaysInMonth(d.year, d.month);
+
+  static DateTime _prevBlock(DateTime sel) {
+    final blockStart = ((sel.day - 1) ~/ 5) * 5 + 1; // 1,6,11,16,21,26
+    final prevStart = blockStart - 5;
+    if (prevStart >= 1) return DateTime(sel.year, sel.month, prevStart);
+
+    // mundur ke bulan sebelumnya, blok terakhir
+    final prevMonth = DateTime(sel.year, sel.month - 1, 1);
+    final dim = _daysInMonth(prevMonth);
+    final lastStart = ((dim - 1) ~/ 5) * 5 + 1;
+    return DateTime(prevMonth.year, prevMonth.month, lastStart);
+  }
+
+  static DateTime _nextBlock(DateTime sel) {
+    final dim = _daysInMonth(sel);
+    final blockStart = ((sel.day - 1) ~/ 5) * 5 + 1;
+    final nextStart = blockStart + 5;
+    if (nextStart <= dim) return DateTime(sel.year, sel.month, nextStart);
+
+    // maju ke bulan berikutnya, blok pertama (1-5)
+    final nextMonth = DateTime(sel.year, sel.month + 1, 1);
+    return DateTime(nextMonth.year, nextMonth.month, 1);
+  }
+
+  String _wk(int w) {
+    const m = {1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat',7:'Sun'};
+    return m[w]!;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final days = List.generate(7, (i) => widget.stripStart.add(Duration(days: i)));
+    final now = DateTime.now();
+    final dim = _daysInMonth(selected);
+    final start = ((selected.day - 1) ~/ 5) * 5 + 1;
+    final endDay = (start + 4 <= dim) ? start + 4 : dim;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: GestureDetector(
-        onVerticalDragUpdate: (details) {
-          setState(() {
-            // Adjust position or behavior here based on swipe
-            _calendarPosition += details.primaryDelta!;
-          });
-        },
-        onVerticalDragEnd: (_) {
-          // Reset or transition smoothly
-          setState(() {
-            var _calendarPosition = 0;  // or set it to the default position
-          });
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-          decoration: BoxDecoration(
-            color: _cardBlue,
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Row(
-            children: [
-              _ArrowBtn(icon: Icons.chevron_left, onTap: widget.onPrevWeek),
-              const SizedBox(width: 4),
-              ...days.map((d) {
-                final isToday = _isSameDay(d, DateTime.now());
-                final isSelected = _isSameDay(d, widget.selected);
-                return Expanded(
-                  child: _DayPill(
-                    weekday: _weekdayShort(d.weekday),
+    final days = List<DateTime>.generate(
+      endDay - start + 1,
+          (i) => DateTime(selected.year, selected.month, start + i),
+    );
+
+    return Row(
+      children: [
+        _RoundIconBtn(icon: Icons.chevron_left, onTap: () => onSelect(_prevBlock(selected))),
+        const SizedBox(width: 8),
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: days.map((d) {
+                final isSelected = d.year == selected.year &&
+                    d.month == selected.month &&
+                    d.day == selected.day;
+                final isToday = isSameDay(d, now);
+
+                // Biru = tanggal realtime (persisten), Oranye = tanggal dipilih (kecuali hari ini)
+                Color? bg;
+                if (isToday) {
+                  bg = _scBlue;
+                } else if (isSelected) {
+                  bg = _scOrange;
+                }
+
+                // Teks putih di biru/transparan, hitam di oranye (sesuai HTML)
+                final Color textColor = (bg == _scOrange) ? Colors.black : Colors.white;
+
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: _DayChipBtn(
+                    weekday: _wk(d.weekday),
                     day: d.day,
-                    selected: isSelected,
-                    isToday: isToday,
-                    onTap: () => widget.onSelect(d),
+                    bg: bg,
+                    textColor: textColor,
+                    // titik putih JANGAN muncul pada tanggal realtime
+                    showWhiteDot: isSelected && !isToday,
+                    onTap: () => onSelect(d),
                   ),
                 );
               }).toList(),
-              const SizedBox(width: 4),
-              _ArrowBtn(icon: Icons.chevron_right, onTap: widget.onNextWeek),
-            ],
+            ),
           ),
         ),
-      ),
-    );
-  }
-
-  bool _isSameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
-
-  String _weekdayShort(int w) {
-    const map = {1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat', 7: 'Sun'};
-    return map[w]!;
-  }
-}
-
-class _DayPill extends StatelessWidget {
-  final String weekday;
-  final int day;
-  final bool selected;
-  final bool isToday;  // isToday flag to track if it's today's date
-  final VoidCallback onTap;
-
-  const _DayPill({
-    required this.weekday,
-    required this.day,
-    required this.selected,
-    required this.isToday,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Check if it's the current day
-    final isCurrentDay = DateTime.now().day == day &&
-        DateTime.now().month == DateTime.now().month &&
-        DateTime.now().year == DateTime.now().year;
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        decoration: BoxDecoration(
-          color: isCurrentDay
-              ? Colors.blueAccent  // Today is highlighted in blue
-              : selected
-              ? Colors.orange  // Selected date gets orange
-              : Colors.transparent, // Default background is transparent
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white24, width: 1),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(weekday, style: const TextStyle(color: _subtle, fontSize: 12)),
-            const SizedBox(height: 6),
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: selected || isCurrentDay ? Colors.white : Colors.transparent,
-              child: Text(
-                '$day',
-                style: TextStyle(
-                  color: isCurrentDay
-                      ? Colors.blueAccent // Today's text is blue
-                      : selected
-                      ? Colors.white // Selected date text is white
-                      : Colors.white, // Default text is white
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+        const SizedBox(width: 8),
+        _RoundIconBtn(icon: Icons.chevron_right, onTap: () => onSelect(_nextBlock(selected))),
+      ],
     );
   }
 }
 
-
-bool _isSameDate(DateTime a, DateTime b) =>
-    a.year == b.year && a.month == b.month && a.day == b.day;
-
-String _weekdayShort(int w) {
-  // 1=Mon ... 7=Sun
-  const map = {1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat', 7: 'Sun'};
-  return map[w]!;
-}
-
-class ArrowButton extends StatelessWidget {
+class _RoundIconBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
-
-  const ArrowButton({super.key, required this.icon, required this.onTap});
-
+  const _RoundIconBtn({required this.icon, required this.onTap});
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(999),
       child: Container(
-        width: 28,
-        height: 48,
-        alignment: Alignment.center,
+        width: 32, height: 32,
         decoration: BoxDecoration(
-          color: Colors.white10,
-          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withOpacity(.3)),
+          shape: BoxShape.circle,
+          color: Colors.transparent,
         ),
-        child: Icon(icon, color: Colors.white),
+        alignment: Alignment.center,
+        child: Icon(icon, size: 18, color: Colors.white.withOpacity(.9)),
       ),
     );
   }
 }
 
-class DayPillWidget extends StatelessWidget {
+class _DayChipBtn extends StatelessWidget {
   final String weekday;
   final int day;
-  final bool selected;
+  final Color? bg;
+  final Color textColor;
+  final bool showWhiteDot;
   final VoidCallback onTap;
 
-  const DayPillWidget({super.key,
+  const _DayChipBtn({
     required this.weekday,
     required this.day,
-    required this.selected,
+    required this.bg,
+    required this.textColor,
+    required this.showWhiteDot,
     required this.onTap,
   });
 
@@ -1339,303 +1450,43 @@ class DayPillWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(10),
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        width: 52,
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
         decoration: BoxDecoration(
-          color: _cardBlue,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white24, width: 1),
+          color: bg ?? Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withOpacity(.3)),
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Stack(
+          alignment: Alignment.center,
           children: [
-            Text(weekday, style: const TextStyle(color: _subtle, fontSize: 12)),
-            const SizedBox(height: 6),
-            CircleAvatar(
-              radius: 14,
-              backgroundColor: selected ? Colors.white : Colors.white10,
-              child: Text(
-                '$day',
-                style: TextStyle(
-                  color: selected ? _bgBlue : Colors.white,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 13,
+            if (showWhiteDot)
+              Positioned(
+                bottom: 2,
+                child: Container(
+                  width: 20, height: 20,
+                  decoration: const BoxDecoration(
+                    color: Colors.white, shape: BoxShape.circle,
+                  ),
                 ),
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class DatePill extends StatelessWidget {
-  final String weekday;
-  final int day;
-  final bool selected;
-  const DatePill({super.key, required this.weekday, required this.day, this.selected = false});
-  @override
-  Widget build(BuildContext context) {
-    final border = Border.all(color: Colors.white24, width: 1);
-    return Container(
-      width: 62,
-      decoration: BoxDecoration(
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(weekday, style: const TextStyle(color: _subtle, fontSize: 12)),
-          const SizedBox(height: 6),
-          CircleAvatar(
-            radius: 16,
-            backgroundColor: selected ? Colors.white : Colors.white10,
-            child: Text(
-              '$day',
-              style: TextStyle(
-                color: selected ? _bgBlue : Colors.blueAccent,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Schedule card
-class _ScheduleCard extends StatelessWidget {
-  const _ScheduleCard();
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _cardBlue,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: Colors.white10,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.directions_run_rounded, color: Colors.white),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    Icon(Icons.schedule, size: 16, color: _subtle),
-                    SizedBox(width: 6),
-                    Text('06:20 ', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-                    Text('07:30', style: TextStyle(color: _subtle)),
-                  ],
-                ),
-                SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(Icons.place_outlined, size: 16, color: _subtle),
-                    SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'Gelora Bung Karno',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          )
-        ],
-      ),
-    );
-  }
-}
-
-/// Partner card
-class _PartnerCard extends StatelessWidget {
-  const _PartnerCard();
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _navBlue,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white10),
-      ),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: const BoxDecoration(shape: BoxShape.circle, color: _divider),
-            clipBehavior: Clip.antiAlias,
-            child: Image.asset(
-              'assets/avatar.png',
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => const Icon(Icons.person, color: Colors.white70),
-            ),
-          ),
-          const SizedBox(width: 10),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _MiniTag(text: 'Tunanetra'),
-                SizedBox(height: 4),
+                Text(weekday, style: TextStyle(color: textColor, fontSize: 12)),
+                const SizedBox(height: 2),
                 Text(
-                  'Aldy Giovani',
+                  '$day',
                   style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
+                    color: textColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
             ),
-          ),
-          FilledButton.tonalIcon(
-            onPressed: null,
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.white10,
-              foregroundColor: Colors.white,
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-              textStyle: TextStyle(fontWeight: FontWeight.w800),
-            ),
-            icon: Icon(Icons.my_location_rounded, size: 18),
-            label: Text('Pantau lokasi'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MiniTag extends StatelessWidget {
-  final String text;
-  const _MiniTag({required this.text});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: Colors.white12,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800)),
-    );
-  }
-}
-
-class _BottomNav extends StatelessWidget {
-  final VoidCallback onTapHome, onTapTunanetra, onTapMaps, onTapChat, onTapMore;
-  const _BottomNav({
-    required this.onTapHome,
-    required this.onTapTunanetra,
-    required this.onTapMaps,
-    required this.onTapChat,
-    required this.onTapMore,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 78,
-      decoration: const BoxDecoration(
-        color: _navBlue,
-        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, -2))],
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _NavButton(
-            icon: Icons.home_rounded,
-            label: 'Home',
-            selected: true,
-            onTap: onTapHome,
-          ),
-          _NavButton(
-            icon: Icons.groups_2_rounded,
-            label: 'Tunanetra',
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const TunanetraPageScreen()), // Navigate to TunanetraPageScreen
-              );
-            },
-          ),
-          _NavButton(
-            icon: Icons.map_rounded,
-            label: 'Maps',
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const MapsPageScreen()),
-              );
-            },
-          ),
-          _NavButton(
-            icon: Icons.chat_bubble_outline_rounded,
-            label: 'Hubungkan',
-            onTap: () {
-              // Implement navigation for Hubungkan if needed
-            },
-          ),
-          _NavButton(
-            icon: Icons.more_horiz_rounded,
-            label: '$defaultFirebaseAppName', // Ensure this variable is defined
-            onTap: onTapMore,
-          ),
-        ],
-
-      ),
-    );
-  }
-}
-class _NavButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _NavButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.selected = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = selected ? _accent : _subtle;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: SizedBox(
-        width: 66,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Icon(icon, color: color),
-            const SizedBox(height: 4),
-            Text(label, textAlign: TextAlign.center,
-                style: TextStyle(color: color, fontSize: 12,
-                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600)),
           ],
         ),
       ),
@@ -1643,59 +1494,196 @@ class _NavButton extends StatelessWidget {
   }
 }
 
-// In the HomePage or Bottom Navigation logic
+/* ===================== SCHEDULE CARD (HTML-like) ===================== */
+class _ScheduleCardNew extends StatelessWidget {
+  final String start, end, place;
+  const _ScheduleCardNew({required this.start, required this.end, required this.place});
 
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _scCard, borderRadius: BorderRadius.circular(14),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Container(
+            width: 48, height: 48,
+            decoration: BoxDecoration(
+              color: _scInner, borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.directions_walk_rounded, color: Colors.white),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.access_time, size: 16, color: Colors.white.withOpacity(.7)),
+                  const SizedBox(width: 6),
+                  Text(start, style: const TextStyle(
+                      color: _scOrange, fontWeight: FontWeight.w800)),
+                  const SizedBox(width: 6),
+                  Text(end, style: TextStyle(
+                      color: Colors.white.withOpacity(.7), fontWeight: FontWeight.w600)),
+                ]),
+                const SizedBox(height: 6),
+                Row(children: [
+                  Icon(Icons.place_rounded, size: 16, color: Colors.white.withOpacity(.7)),
+                  const SizedBox(width: 6),
+                  Text(place, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                ]),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/* ===================== PARTNER CARD + RAIL (HTML-like) ===================== */
+class _PartnerCardRail extends StatelessWidget {
+  final String rolePill;
+  final String name;
+  final String buttonDisabledText;
+  const _PartnerCardRail({
+    required this.rolePill,
+    required this.name,
+    required this.buttonDisabledText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        // vertical rail di luar kartu
+        Positioned.fill(
+          left: 0, right: null,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Container(
+              margin: const EdgeInsets.only(left: 2),
+              width: 6,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(.2),
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+          ),
+        ),
+        // card
+        Container(
+          margin: const EdgeInsets.only(left: 16),
+          decoration: BoxDecoration(
+            color: _scCard, borderRadius: BorderRadius.circular(14),
+          ),
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 48, height: 48,
+                decoration: const BoxDecoration(
+                  color: _scInner, shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: const Icon(Icons.person, color: Colors.white),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _scInner, borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        rolePill,
+                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      name,
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+              ),
+              IgnorePointer(
+                child: Opacity(
+                  opacity: .5,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: _scInner, borderRadius: BorderRadius.circular(10),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.location_on_rounded, size: 16, color: Colors.white),
+                        const SizedBox(width: 6),
+                        Text(
+                          buttonDisabledText,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 /* =========================================================================
-   (OPSIONAL) LEMBAR PILIHAN, BULAN, NOTIF — tetap seperti punyamu
+   BOTTOM SHEET KALENDER (bulan penuh untuk pilih tanggal)
    ========================================================================= */
 class _MonthCalendarSheet extends StatefulWidget {
   final DateTime initial;
   const _MonthCalendarSheet({required this.initial});
   @override
   State<_MonthCalendarSheet> createState() => _MonthCalendarSheetState();
-
-  void onSelect(DateTime date) {}
 }
 
 class _MonthCalendarSheetState extends State<_MonthCalendarSheet> {
-  late DateTime _cursor;  // Date currently being displayed
-  double _calendarPosition = 0.0; // Track vertical swipe position
-  final DateTime currentDate = DateTime.now();  // Current date for reference
+  late DateTime _cursor;
+  double _calendarPosition = 0.0;
+  final DateTime currentDate = DateTime.now();
 
   @override
   void initState() {
     super.initState();
-    _cursor = DateTime(widget.initial.year, widget.initial.month, 1);  // Set initial month
+    _cursor = DateTime(widget.initial.year, widget.initial.month, 1);
   }
 
   @override
   Widget build(BuildContext context) {
-    final maxHeight = MediaQuery.of(context).size.height * 0.9; // Max height for calendar sheet
-    final daysInMonth = DateUtils.getDaysInMonth(_cursor.year, _cursor.month); // Number of days in the month
-    final firstWeekday = DateTime(_cursor.year, _cursor.month, 1).weekday; // First day of the week
-    final leadingEmpty = (firstWeekday - 1) % 7; // Empty spaces before the first day of the month
+    final maxHeight = MediaQuery.of(context).size.height * 0.9;
+    final daysInMonth = DateUtils.getDaysInMonth(_cursor.year, _cursor.month);
+    final firstWeekday = DateTime(_cursor.year, _cursor.month, 1).weekday;
+    final leadingEmpty = (firstWeekday - 1) % 7;
 
     return SafeArea(
       child: GestureDetector(
         onVerticalDragUpdate: (details) {
-          setState(() {
-            _calendarPosition += details.primaryDelta!; // Track swipe position
-          });
+          setState(() => _calendarPosition += details.primaryDelta ?? 0);
         },
         onVerticalDragEnd: (_) {
           if (_calendarPosition > 50) {
-            setState(() {
-              _cursor = DateTime(_cursor.year, _cursor.month + 1, 1); // Swipe down to go to the next month
-            });
+            setState(() => _cursor = DateTime(_cursor.year, _cursor.month + 1, 1));
           } else if (_calendarPosition < -50) {
-            setState(() {
-              _cursor = DateTime(_cursor.year, _cursor.month - 1, 1); // Swipe up to go to the previous month
-            });
+            setState(() => _cursor = DateTime(_cursor.year, _cursor.month - 1, 1));
           }
-          setState(() {
-            _calendarPosition = 0.0;  // Reset swipe position after the drag ends
-          });
+          setState(() => _calendarPosition = 0.0);
         },
         child: ConstrainedBox(
           constraints: BoxConstraints(maxHeight: maxHeight),
@@ -1704,15 +1692,10 @@ class _MonthCalendarSheetState extends State<_MonthCalendarSheet> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Month Navigation (Previous & Next Month)
                 Row(
                   children: [
                     IconButton(
-                      onPressed: () {
-                        setState(() {
-                          _cursor = DateTime(_cursor.year, _cursor.month - 1, 1); // Go to the previous month
-                        });
-                      },
+                      onPressed: () => setState(() => _cursor = DateTime(_cursor.year, _cursor.month - 1, 1)),
                       icon: const Icon(Icons.chevron_left, color: Colors.white),
                     ),
                     Expanded(
@@ -1724,18 +1707,12 @@ class _MonthCalendarSheetState extends State<_MonthCalendarSheet> {
                       ),
                     ),
                     IconButton(
-                      onPressed: () {
-                        setState(() {
-                          _cursor = DateTime(_cursor.year, _cursor.month + 1, 1); // Go to the next month
-                        });
-                      },
+                      onPressed: () => setState(() => _cursor = DateTime(_cursor.year, _cursor.month + 1, 1)),
                       icon: const Icon(Icons.chevron_right, color: Colors.white),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-
-                // Grid for Dates
                 Expanded(
                   child: GridView.builder(
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -1744,21 +1721,19 @@ class _MonthCalendarSheetState extends State<_MonthCalendarSheet> {
                       crossAxisSpacing: 8,
                     ),
                     itemCount: leadingEmpty + daysInMonth,
+
                     itemBuilder: (context, index) {
-                      if (index < leadingEmpty) {
-                        return const SizedBox.shrink(); // Empty space for the first days of the week
-                      }
-                      final day = index - leadingEmpty + 1; // Calculate the day number
+                      if (index < leadingEmpty) return const SizedBox.shrink();
+                      final day = index - leadingEmpty + 1;
                       final date = DateTime(_cursor.year, _cursor.month, day);
-                      final isSelected = _isSameDay(date, currentDate); // Check if the day is today
+                      final isSelected = isSameDay(date, currentDate);
 
                       return InkWell(
-                        onTap: () {
-                          widget.onSelect(date); // Return selected date back to parent widget
-                        },
+                        onTap: () => Navigator.pop(context, date),
+                        borderRadius: BorderRadius.circular(12),
                         child: Container(
                           decoration: BoxDecoration(
-                            color: isSelected ? Colors.orangeAccent : _cardBlue, // Highlight current day with a special color
+                            color: isSelected ? Colors.orangeAccent : _cardBlue,
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: Colors.white24),
                           ),
@@ -1767,7 +1742,7 @@ class _MonthCalendarSheetState extends State<_MonthCalendarSheet> {
                             '$day',
                             style: TextStyle(
                               color: isSelected ? Colors.black : Colors.white,
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal, // Bold for selected day
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                             ),
                           ),
                         ),
@@ -1783,15 +1758,10 @@ class _MonthCalendarSheetState extends State<_MonthCalendarSheet> {
     );
   }
 
-  // Helper function to check if two dates are the same day
-  bool _isSameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
-
-  // Helper function to get the month name
   String _getMonthName(int month) {
     const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December'
+      'January','February','March','April','May','June',
+      'July','August','September','October','November','December'
     ];
     return months[month - 1];
   }
@@ -1799,19 +1769,129 @@ class _MonthCalendarSheetState extends State<_MonthCalendarSheet> {
 
 class Dow extends StatelessWidget {
   final String t;
-
   const Dow(this.t);
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
       child: Center(
-        child: Text(t, style: const TextStyle(
-            color: _subtle, fontWeight: FontWeight.w700)),
+        child: Text(t, style: const TextStyle(color: _subtle, fontWeight: FontWeight.w700)),
       ),
     );
   }
 }
 
+/* =========================================================================
+   SHEET: SEMUA FITUR (setengah layar) — anti overflow
+   ========================================================================= */
+class _AllFeaturesSheet extends StatelessWidget {
+  final List<FeatureDef> features;
+  final ValueChanged<FeatureDef> onTap;
 
+  const _AllFeaturesSheet({required this.features, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        const SizedBox(height: 10),
+        Container(
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Colors.white24,
+            borderRadius: BorderRadius.circular(99),
+          ),
+        ),
+        const SizedBox(height: 12),
+        const Text(
+          'Semua Fitur',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: GridView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 4,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 0.9,
+            ),
+            itemCount: features.length,
+    itemBuilder: (context, i) {
+    final feature = features[i];
+    return _AllFeatureTile(
+    feature: feature,
+    onTap: () => onTap(feature));
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+
+class _AllFeatureTile extends StatelessWidget {
+  final FeatureDef feature;
+  final VoidCallback onTap;
+  const _AllFeatureTile({required this.feature, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        decoration: BoxDecoration(
+          color: _allTileBg,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (feature.mono != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  feature.mono!,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                  ),
+                ),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Icon(feature.icon, color: Colors.white, size: 22),
+              ),
+            // Label anti-overflow
+            SizedBox(
+              height: 28,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  feature.label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 

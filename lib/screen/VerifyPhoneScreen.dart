@@ -31,20 +31,40 @@ const _otpDashEmpty = Color(0xFFB8C1D8);
 
 class VerifyPhoneScreen extends StatefulWidget {
   final String phoneE164;
-  // initialVerificationId tidak dipakai lagi di versi custom token
-  final String? initialVerificationId;
-  const VerifyPhoneScreen({super.key, required this.phoneE164, this.initialVerificationId});
+  final String? linkEmail;     // ⬅️ baru
+  final String? linkPassword;  // ⬅️ baru
+
+  const VerifyPhoneScreen({
+    super.key,
+    required this.phoneE164,
+    this.linkEmail,
+    this.linkPassword,
+  });
 
   static Widget fromRouteArgs(RouteSettings settings) {
     String phone = '+6281112345678';
+    String? linkEmail;
+    String? linkPassword;
+
     final args = settings.arguments;
     if (args is Map) {
       if (args['phoneE164'] is String && (args['phoneE164'] as String).isNotEmpty) {
         phone = args['phoneE164'] as String;
       }
+      if (args['linkEmail'] is String && (args['linkEmail'] as String).isNotEmpty) {
+        linkEmail = args['linkEmail'] as String;
+      }
+      if (args['linkPassword'] is String && (args['linkPassword'] as String).isNotEmpty) {
+        linkPassword = args['linkPassword'] as String;
+      }
     }
-    return VerifyPhoneScreen(phoneE164: phone);
+    return VerifyPhoneScreen(
+      phoneE164: phone,
+      linkEmail: linkEmail,
+      linkPassword: linkPassword,
+    );
   }
+
 
   @override
   State<VerifyPhoneScreen> createState() => _VerifyPhoneScreenState();
@@ -91,7 +111,10 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
   }
 
   Future<void> _startPhoneAuth() async {
-    setState(() { _busy = true; _err = null; });
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
     try {
       await _otpStart(widget.phoneE164);
       if (!mounted) return;
@@ -105,7 +128,10 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
 
   Future<void> _submit() async {
     if (!_canVerify) return;
-    setState(() { _busy = true; _err = null; });
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
     try {
       await _otpVerifyAndLogin(widget.phoneE164, _otpC.text);
       if (!mounted) return;
@@ -134,8 +160,10 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
     if (!_otpF.hasFocus) _otpF.requestFocus();
   }
 
-  String _fmt(int s) => '${(s ~/ 60).toString().padLeft(2,'0')}:${(s % 60).toString().padLeft(2,'0')}'
-      .replaceAll(' ', '');
+  String _fmt(int s) =>
+      '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(
+          2, '0')}'
+          .replaceAll(' ', '');
 
   @override
   Widget build(BuildContext context) {
@@ -145,7 +173,8 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
       backgroundColor: _bgBlue,
       appBar: AppBar(
         backgroundColor: _bgBlue,
-        title: const Text('VERIFY PHONE', style: TextStyle(color: Colors.white)),
+        title: const Text(
+            'VERIFY PHONE', style: TextStyle(color: Colors.white)),
         leading: IconButton(
           onPressed: () => Navigator.pop(context),
           icon: const Icon(Icons.arrow_back, color: Colors.white),
@@ -162,7 +191,9 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
             _OtpCapsule(
               controller: _otpC,
               focusNode: _otpF,
-              onTap: () { if (!_otpF.hasFocus) _otpF.requestFocus(); },
+              onTap: () {
+                if (!_otpF.hasFocus) _otpF.requestFocus();
+              },
             ),
             const SizedBox(height: 24),
             SizedBox(
@@ -172,24 +203,29 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: verifyColor,
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
                   disabledBackgroundColor: verifyColor,
                   disabledForegroundColor: Colors.white,
                 ),
                 child: _busy
                     ? const SizedBox(width: 20, height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Text('Verify', style: TextStyle(fontWeight: FontWeight.bold)),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
+                    : const Text(
+                    'Verify', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
             ),
             const SizedBox(height: 18),
             const Divider(color: Color(0x332C3B6B)),
             const SizedBox(height: 10),
-            const Text('Tidak menerima kode?', style: TextStyle(color: _subtle), textAlign: TextAlign.center),
+            const Text('Tidak menerima kode?', style: TextStyle(color: _subtle),
+                textAlign: TextAlign.center),
             const SizedBox(height: 8),
             if (_secondsLeft > 0)
               Text('Kirim ulang dalam ${_fmt(_secondsLeft)}',
-                  style: const TextStyle(color: _accent, fontSize: 18), textAlign: TextAlign.center)
+                  style: const TextStyle(color: _accent, fontSize: 18),
+                  textAlign: TextAlign.center)
             else
               Center(
                 child: SizedBox(
@@ -199,7 +235,8 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF31406B),
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                     ),
                     child: const Text('Kirim ulang kode'),
                   ),
@@ -215,15 +252,21 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
           Positioned(
             left: 16, right: 16, top: 12,
             child: Material(
-              color: _errorRed, elevation: 6, borderRadius: BorderRadius.circular(14),
+              color: _errorRed,
+              elevation: 6,
+              borderRadius: BorderRadius.circular(14),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 10),
                 child: Row(children: [
                   const Icon(Icons.error_outline, color: Colors.white),
                   const SizedBox(width: 10),
-                  Expanded(child: Text(_err!, style: const TextStyle(color: Colors.white))),
+                  Expanded(
+                      child: Text(_err!, style: const TextStyle(color: Colors
+                          .white))),
                   TextButton(onPressed: () => setState(() => _err = null),
-                      child: const Text('Tutup', style: TextStyle(color: Colors.white)))
+                      child: const Text('Tutup', style: TextStyle(color: Colors
+                          .white)))
                 ]),
               ),
             ),
@@ -255,12 +298,31 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
     if (r.statusCode != 200 || j['ok'] != true) {
       throw Exception(j['error'] ?? 'Kode salah/expired');
     }
+
     final token = j['token'] as String;
-    await FirebaseAuth.instance.signInWithCustomToken(token);
+    // 1) sign in dengan custom token
+    final cred = await FirebaseAuth.instance.signInWithCustomToken(token);
+
+    // 2) opsional: link email+password
+    if (widget.linkEmail != null && widget.linkPassword != null) {
+      final emailCred = EmailAuthProvider.credential(
+        email: widget.linkEmail!,
+        password: widget.linkPassword!,
+      );
+      try {
+        await cred.user?.linkWithCredential(emailCred);
+        // (opsional) kirim verifikasi email
+        await cred.user?.sendEmailVerification();
+      } on FirebaseAuthException catch (e) {
+        // kalau sudah terpakai, bisa tampilkan pesan agar user sign in email biasa
+        if (e.code != 'provider-already-linked') rethrow;
+      }
+    }
   }
 }
 
-class _OtpCapsule extends StatelessWidget {
+
+  class _OtpCapsule extends StatelessWidget {
   final TextEditingController controller; final FocusNode focusNode; final VoidCallback onTap;
   const _OtpCapsule({required this.controller, required this.focusNode, required this.onTap});
   @override
@@ -308,10 +370,11 @@ class _OtpCapsule extends StatelessWidget {
 }
 
 // ====== Minimal OtpApi (konfigurasi base URL server di sini) ======
+// ====== Minimal OtpApi (konfigurasi base URL server di sini) ======
 class OtpApi {
-  // GANTI sesuai target kamu:
-  // - Android emulator: 'http://10.0.2.2:3000'
-  // - iOS simulator:    'http://localhost:3000'
-  // - Device fisik:     'http://<IP-laptop-kamu>:3000'
+  // Android emulator -> 10.0.2.2
+  // iOS simulator   -> localhost
+  // Device fisik    -> ganti ke IP laptop kamu, mis: http://192.168.1.10:3000
   static const String base = 'http://10.0.2.2:3000';
 }
+

@@ -228,30 +228,25 @@ class _SignUpScreenState extends State<SignUpScreen> {
     setState(() => _busyChoice = true);
     try {
       final phone = IndoPhoneFormatter.toE164(_phoneC.text);
-      // 1) Kirim OTP SMS
-      final verificationId = await AuthService.i.startPhoneAuth(phone);
 
-      // 2) Buka layar verifikasi SMS
+      // ⬇️ Langsung buka VerifyPhoneScreen. Tidak perlu AuthService.startPhoneAuth
       if (!mounted) return;
       Navigator.pushNamed(
         context,
         '/verify-phone',
         arguments: {
           'phoneE164': phone,
-          'verificationId': verificationId,
-          // (opsional) kalau mau dilink menjadi email+password setelah OTP sukses:
-          'linkEmail': _emailC.text.trim(),
-          'linkPassword': _pwC.text,
+          'linkEmail': _emailC.text.trim(),   // opsional: tautkan email
+          'linkPassword': _pwC.text,          // opsional: tautkan password
         },
       );
-    } on FirebaseAuthException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message ?? e.code)));
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
       if (mounted) setState(() => _busyChoice = false);
     }
   }
+
 
   void _next(FocusNode next) => FocusScope.of(context).requestFocus(next);
 
@@ -430,7 +425,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         child: ElevatedButton(
                           onPressed: () { setState(() => _agree = true); Navigator.pop(ctx); },
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: _accent,
+                            backgroundColor:Colors.white,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                           ),
                           child: const Text('Setuju', style: TextStyle(fontWeight: FontWeight.w700)),

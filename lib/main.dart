@@ -3,6 +3,9 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+// === Auth Service (untuk init Google Sign-In) ===
+import 'screen/auth_service.dart';
+
 // === Screens ===
 import 'screen/WelcomeScreen.dart';
 import 'screen/SignInScreen.dart';
@@ -11,13 +14,24 @@ import 'screen/HomePageScreen.dart';
 import 'screen/ChooseRoleScreen.dart';
 import 'screen/onboarding_role_page.dart';      // <-- satu sumber saja
 import 'screen/TunanetraPageScreen.dart';       // atau 'screen/tunanetra_page_screen.dart'
-import 'screen/MapsPageScreen.dart'; // ⬅️ tambahkan
+import 'screen/MapsPageScreen.dart';
+import 'screen/ProfilePageScreen.dart';
+import 'screen/CariPendampingPageScreen.dart';
+import 'screen/verifyphonescreen.dart';
+
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+
+  // ===== W A J I B untuk google_sign_in v7 =====
+  // Ganti dengan Web Client ID (OAuth 2.0) dari Firebase/GCP.
+  await AuthService.initGoogleSignIn(
+    serverClientId: '638926623166-uqu6balvin3muvch9gqvv2uil28osl7n.apps.googleusercontent.com',
+    );
+
   runApp(const MyApp());
 }
 
@@ -59,14 +73,26 @@ class MyApp extends StatelessWidget {
           case '/onboarding-role':
             return MaterialPageRoute(builder: (_) => const OnboardingRolePage());
 
-          case '/tunanetra': // <<< rute untuk TunanetraPageScreen
+          case '/tunanetra':
             return MaterialPageRoute(builder: (_) => const TunanetraPageScreen());
 
-          case '/maps': // ⬅️ ini yang bikin tombol Maps jalan
+          case '/maps':
             return MaterialPageRoute(builder: (_) => const MapsPageScreen());
 
+          case '/profile':
+            return MaterialPageRoute(builder: (_) => const ProfilePageScreen());
+
+          case '/Cari':
+            return MaterialPageRoute(builder: (context) => const CariPendampingPageScreen());
+// di onGenerateRoute:
+          case '/verify-phone':
+            return MaterialPageRoute(
+              builder: (_) => VerifyPhoneScreen.fromRouteArgs(settings),
+              settings: settings,
+            );
+
           default:
-          // fallback aman
+          // Fallback aman
             return MaterialPageRoute(
               builder: (_) => WelcomeScreen(
                 onSignInClick: () => navigatorKey.currentState!.pushNamed('/signin'),

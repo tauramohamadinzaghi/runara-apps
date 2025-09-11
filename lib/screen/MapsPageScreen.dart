@@ -5,7 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 
-/// ===== Palette =====
+// ⬇️ Import RunaraThinNav & AppTab (ganti path sesuai struktur proyekmu)
+import 'widget/runara_thin_nav.dart';
+
+// ===== Palette =====
 const _bgBlue = Color(0xFF0B1B4D);
 const _cardBlue = Color(0xFF152449);
 const _navBlue = Color(0xFF0E1E44);
@@ -51,7 +54,6 @@ class _MapsPageScreenState extends State<MapsPageScreen>
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        // Tidak memaksa buka setting; cukup lanjut tanpa myLocation
         setState(() => _locationGranted = false);
         return;
       }
@@ -79,8 +81,7 @@ class _MapsPageScreenState extends State<MapsPageScreen>
   }
 
   // Format angka
-  String _fmtKm(double v) =>
-      '${v.toStringAsFixed(1).replaceAll('.', ',')} KM';
+  String _fmtKm(double v) => '${v.toStringAsFixed(1).replaceAll('.', ',')} KM';
   String _fmtSpeed(double v) =>
       '${v.toStringAsFixed(0).replaceAll('.', ',')} km/jam';
 
@@ -254,8 +255,6 @@ class _MapsPageScreenState extends State<MapsPageScreen>
                                 ),
                                 onMapCreated: (c) async {
                                   _mapCtrl = c;
-                                  // (Opsional) animasi kamera saat doc berubah
-                                  // — biar tidak terlalu "lompat2", kita biarkan statis dulu
                                 },
                                 myLocationEnabled: _locationGranted,
                                 myLocationButtonEnabled: true,
@@ -266,7 +265,7 @@ class _MapsPageScreenState extends State<MapsPageScreen>
                                 compassEnabled: true,
                               ),
 
-                              // Panel info bawah (tetap seperti versi HTML)
+                              // Panel info bawah
                               Positioned(
                                 left: 0,
                                 right: 0,
@@ -325,17 +324,8 @@ class _MapsPageScreenState extends State<MapsPageScreen>
         ],
       ),
 
-      // ===== Bottom nav: Home <-> Tunanetra <-> Maps
-      bottomNavigationBar: _BottomNavLarge(
-        selected: _BottomItem.maps,
-        onTapHome: () =>
-            Navigator.of(context).pushReplacementNamed('/home'),
-        onTapTunanetra: () =>
-            Navigator.of(context).pushReplacementNamed('/tunanetra'),
-        onTapMaps: () {}, // sudah di Maps
-        onTapChat: () {}, // TODO
-        onTapMore: () {}, // TODO
-      ),
+      // ===== Bottom nav pakai RunaraThinNav =====
+      bottomNavigationBar: const RunaraThinNav(current: AppTab.maps),
     );
   }
 }
@@ -538,126 +528,6 @@ class _RoleBadge extends StatelessWidget {
             fontSize: fontSize,
             fontWeight: FontWeight.w800,
             height: 1.0),
-      ),
-    );
-  }
-}
-
-/* ===================== Bottom Nav (reusable) ===================== */
-
-enum _BottomItem { home, tunanetra, maps, chat, more }
-
-class _BottomNavLarge extends StatelessWidget {
-  final VoidCallback onTapHome,
-      onTapTunanetra,
-      onTapMaps,
-      onTapChat,
-      onTapMore;
-  final _BottomItem selected;
-
-  const _BottomNavLarge({
-    super.key,
-    required this.onTapHome,
-    required this.onTapTunanetra,
-    required this.onTapMaps,
-    required this.onTapChat,
-    required this.onTapMore,
-    this.selected = _BottomItem.home,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 86,
-      decoration: const BoxDecoration(
-        color: _navBlue,
-        boxShadow: [
-          BoxShadow(
-              color: Colors.black26, blurRadius: 8, offset: Offset(0, -2))
-        ],
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _NavBtn(
-            icon: Icons.home_rounded,
-            label: 'Home',
-            selected: selected == _BottomItem.home,
-            onTap: onTapHome,
-          ),
-          _NavBtn(
-            icon: Icons.groups_rounded,
-            label: 'Tunanetra',
-            selected: selected == _BottomItem.tunanetra,
-            onTap: onTapTunanetra,
-          ),
-          _NavBtn(
-            icon: Icons.map_rounded,
-            label: 'Maps',
-            selected: selected == _BottomItem.maps,
-            onTap: onTapMaps,
-          ),
-          _NavBtn(
-            icon: Icons.chat_bubble_outline_rounded,
-            label: 'Hubungkan',
-            selected: selected == _BottomItem.chat,
-            onTap: onTapChat,
-          ),
-          _NavBtn(
-            icon: Icons.more_horiz_rounded,
-            label: 'Lainnya',
-            selected: selected == _BottomItem.more,
-            onTap: onTapMore,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _NavBtn extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  static const double _iconSize = 26;
-  static const double _fontSize = 13;
-
-  const _NavBtn({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.selected = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = selected ? _accent : _subtle;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: SizedBox(
-        width: 72,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: color, size: _iconSize),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: color,
-                fontSize: _fontSize,
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                height: 1.0,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
