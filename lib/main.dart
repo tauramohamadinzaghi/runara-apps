@@ -18,13 +18,17 @@ import 'screen/MapsPageScreen.dart';
 import 'screen/ProfilePageScreen.dart';
 import 'screen/CariPendampingPageScreen.dart';
 import 'screen/verifyphonescreen.dart';
+import 'push_setup.dart'; // <<< ADD
+import 'dart:async';                 // << TAMBAH
 
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  await initPush(); // <<< ADD
 
   // ===== W A J I B untuk google_sign_in v7 =====
   // Ganti dengan Web Client ID (OAuth 2.0) dari Firebase/GCP.

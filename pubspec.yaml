@@ -21,10 +21,14 @@ dependencies:
   flutter_secure_storage: ^9.2.2
   path_provider: ^2.1.4
   intl: ^0.19.0
+  cloud_functions: ^5.0.4
   flutter_markdown: ^0.6.10
   url_launcher: any
   http: ^1.2.0
   shared_preferences: ^2.2.3
+  firebase_messaging: ^15.2.10
+  flutter_local_notifications: ^17.2.1
+
   firebase_storage: ^12.4.10  # Updated to resolve the conflict
   image_picker: ^0.8.5+3     # Ensure you are using the latest null-safe version
 

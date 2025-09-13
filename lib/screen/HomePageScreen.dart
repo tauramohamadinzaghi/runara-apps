@@ -4,6 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'BantuanPageScreen.dart';
+import 'PesanPageScreen.dart';
+// >>> ADDED
+import 'package:url_launcher/url_launcher.dart';
+import 'package:apps_runara/sos_bus.dart';
+// >>> ADDED: for StreamSubscription
+import 'dart:async';
+
 
 import 'ChooseRoleScreen.dart';
 import 'TunanetraPageScreen.dart';
@@ -66,6 +73,9 @@ class _HomePageScreenState extends State<HomePageScreen> {
     return const HomePage();
   }
 }
+
+// >>> ADDED: SOS event subscription
+StreamSubscription<SosPayload>? _sosSub;
 
 /// =================== MODEL & HELPER ===================
 enum UserRole { relawan, tunanetra }
@@ -220,6 +230,123 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     selectedDate = DateTime.now();
     _initUserThenNotifications();
+    @override
+    void initState() {
+      super.initState();
+      selectedDate = DateTime.now();
+      SosBus.ensureFcmReady(); // >>> ADDED: minta izin + subscribe topic 'sos'
+      _initUserThenNotifications();
+      _sosSub = SosBus.stream.listen((p) {
+        // Saat ada SOS masuk, buka pop-out yang sudah kamu buat
+        SosBus.showSosSheet(context);
+        _sosSub = SosBus.stream.listen(_onSos);
+      });
+    };
+  }
+
+// >>> ADDED
+  @override
+  void dispose() {
+    _sosSub?.cancel();
+    super.dispose();
+  }
+
+// << TAMBAH: buka Google Maps
+  Future<void> _openMaps({double? lat, double? lng, String address = ''}) async {
+    Uri uri;
+    if (lat != null && lng != null) {
+      final q = Uri.encodeComponent(address.isEmpty ? '$lat,$lng' : address);
+      uri = Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&q=$q');
+    } else {
+      final q = Uri.encodeComponent(address);
+      uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$q');
+    }
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+// << TAMBAH: tampilkan pop-out permintaan bantuan
+  void _onSos(SosPayload p) {
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0D1B3D), // _bgBlue look
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(width: 40, height: 4,
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(99)),
+              ),
+              const SizedBox(height: 14),
+              const Icon(Icons.report_rounded, color: Colors.redAccent, size: 56),
+              const SizedBox(height: 10),
+              const Text(
+                'Permintaan Bantuan Segera',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 14),
+
+              // avatar + role + nama
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const CircleAvatar(radius: 22, backgroundColor: Color(0xFF2A3B8E), child: Icon(Icons.person,color: Colors.white)),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(color: const Color(0xFF2A3B8E), borderRadius: BorderRadius.circular(999)),
+                        child: Text(p.role, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 12),
+
+              // alamat tebal
+              Text(
+                p.address.isEmpty ? 'Lokasi tidak diketahui' : p.address,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
+              ),
+
+              const SizedBox(height: 16),
+
+              // tombol arahkan lokasi
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.location_on_outlined, size: 18),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.redAccent,
+                    foregroundColor: Colors.white,
+                    shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    textStyle: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  onPressed: () => _openMaps(lat: p.lat, lng: p.lng, address: p.address),
+                  label: const Text('Arahkan Lokasi'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _initUserThenNotifications() async {
@@ -345,6 +472,14 @@ class _HomePageState extends State<HomePage> {
         Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const BantuanPageScreen()),
         );
+        break;
+      case 'messages':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const PesanPageScreen()),
+        );
+        break;
+      case 'sos':
+        SosBus.showSosSheet(context); // >>> ADDED: buka pop-out & kirim SOS
         break;
 
     // Contoh lain (kalau nanti ada halamannya):
@@ -609,6 +744,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 }
+
 class _FeatureIconNav extends StatelessWidget {
   final List<FeatureDef> features; // List of dynamic features
   final int activeIndex;           // The active index (0 = "Semua")
@@ -1895,3 +2031,186 @@ class _AllFeatureTile extends StatelessWidget {
   }
 }
 
+// >>> ADDED: Emergency pop-out sheet (sesuai HTML versi Flutter)
+class _EmergencySheet extends StatelessWidget {
+  final String name;
+  final String role;
+  final String address;
+  final VoidCallback onNavigate;
+
+  const _EmergencySheet({
+    required this.name,
+    required this.role,
+    required this.address,
+    required this.onNavigate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: Colors.transparent,
+      child: Center(
+        child: Container(
+          width: 360,
+          decoration: BoxDecoration(
+            color: const Color(0xFF001957),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 20)],
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Red triangle warning icon (bigger)
+              SizedBox(
+                width: 96,
+                height: 96,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Transform.rotate(
+                      angle: 0,
+                      child: CustomPaint(
+                        size: const Size(92, 92),
+                        painter: _TrianglePainter(color: const Color(0xFFFF2D2D)),
+                      ),
+                    ),
+                    const Text(
+                      '!',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 42,
+                        fontWeight: FontWeight.w900,
+                        height: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              const Text(
+                'Permintaan Bantuan Segera',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 14),
+              // Avatar + name/role
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 56,
+                    height: 56,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF2A3B8E),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.person, color: Colors.white, size: 30),
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        role.isEmpty ? '—' : role,
+                        style: const TextStyle(
+                          color: Color(0xFFFFDD00),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        name.isEmpty ? '—' : name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              // Address
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.place_rounded, color: Colors.white, size: 18),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      address.isEmpty ? '—' : address,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // CTA buttons
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Cancel
+                  TextButton.icon(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    label: const Text(
+                      'Tutup',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  // Navigate
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFFF2D2D),
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    onPressed: onNavigate,
+                    icon: const Icon(Icons.map_rounded, size: 18),
+                    label: const Text('Arahkan Lokasi'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// >>> ADDED: painter untuk segitiga merah
+class _TrianglePainter extends CustomPainter {
+  final Color color;
+  _TrianglePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color;
+    final path = Path()
+      ..moveTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TrianglePainter oldDelegate) => oldDelegate.color != color;
+}

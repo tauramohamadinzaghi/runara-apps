@@ -4,6 +4,10 @@
 
     <!-- Internet untuk akses API -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
         android:label="apps_runara"
@@ -11,9 +15,16 @@
         android:usesCleartextTraffic="true">
 
         <!-- Kunci Google Maps: lebih baik di level application -->
+            <meta-data
+                android:name="com.google.android.geo.API_KEY"
+                android:value="AIzaSyAJvcttF7c6_0dUOOO0xHQEB9jMpw3EDvo"/>
+            <!-- Other configurations -->
+
+        <!-- di dalam <application> -->
         <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="@string/google_maps_key" />
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="sos" />
+
 
         <!-- Facebook SDK (opsional) -->
         <meta-data
