@@ -1,16 +1,297 @@
 import 'dart:async';
-
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:geolocator/geolocator.dart';
-import 'dart:math' as math;
-import 'package:http/http.dart' as http;
 import 'dart:convert';
 
+import 'package:apps_runara/sos_bus.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
-// ⬇️ Import RunaraThinNav & AppTab (ganti path sesuai struktur proyekmu)
+// Nav & Header reusable
+import 'widget/runara_header.dart';
 import 'widget/runara_thin_nav.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+// === RIWAYAT (GANTI PATH JIKA PERLU) ===
+import 'AktivitasRiwayatPageScreen.dart';
+
+/* ===================== SOS TRACKING SCREEN ===================== */
+
+class SosTrackingMapScreen extends StatefulWidget {
+  final double targetLat;
+  final double targetLng;
+  final String? targetName;
+  final String? targetAddress;
+
+  const SosTrackingMapScreen({
+    super.key,
+    required this.targetLat,
+    required this.targetLng,
+    this.targetName,
+    this.targetAddress,
+  });
+
+  // Helper agar mudah dipanggil dari mana pun dengan SosPayload
+  static void open(BuildContext context, SosPayload p) {
+    if (p.lat == null || p.lng == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Koordinat tujuan tidak tersedia')),
+      );
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SosTrackingMapScreen(
+          targetLat: p.lat!,
+          targetLng: p.lng!,
+          targetName: p.name,
+          targetAddress: p.address.isEmpty ? null : p.address,
+        ),
+      ),
+    );
+  }
+
+  @override
+  State<SosTrackingMapScreen> createState() => _SosTrackingMapScreenState();
+}
+
+class _SosTrackingMapScreenState extends State<SosTrackingMapScreen> {
+  GoogleMapController? _map;
+  final Set<Marker> _markers = {};
+  final Set<Polyline> _polylines = {};
+  StreamSubscription<Position>? _posSub;
+
+  // ==== Directions KEY (tanpa --dart-define) ====
+  // ⚠️ Batasi key di Google Cloud Console (HTTP referrer / Android & iOS key restriction) ⚠️
+  static const String _gmapsKey = 'AIzaSyAJvcttF7c6_0dUOOO0xHQEB9jMpw3EDvo';
+
+  final List<LatLng> _route = []; // rute walking dari Directions
+  bool _fetching = false;
+
+  LatLng get _target => LatLng(widget.targetLat, widget.targetLng);
+
+  @override
+  void initState() {
+    super.initState();
+    _initLocation();
+  }
+
+  Future<void> _initLocation() async {
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied ||
+        perm == LocationPermission.deniedForever) {
+      perm = await Geolocator.requestPermission();
+    }
+
+    // posisi awal
+    try {
+      final p = await Geolocator.getCurrentPosition();
+      _updateUser(LatLng(p.latitude, p.longitude));
+    } catch (_) {}
+
+    // stream posisi (tracking)
+    _posSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.best,
+        distanceFilter: 5,
+      ),
+    ).listen((pos) {
+      _updateUser(LatLng(pos.latitude, pos.longitude));
+    });
+  }
+
+  // ===== Polyline decoder Google =====
+  List<LatLng> _decodePolyline(String encoded) {
+    final points = <LatLng>[];
+    int index = 0, lat = 0, lng = 0;
+    while (index < encoded.length) {
+      int b, shift = 0, result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1F) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      final dlat = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+      lat += dlat;
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1F) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      final dlng = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+      lng += dlng;
+      points.add(LatLng(lat / 1e5, lng / 1e5));
+    }
+    return points;
+  }
+
+  double _distM(LatLng a, LatLng b) =>
+      Geolocator.distanceBetween(a.latitude, a.longitude, b.latitude, b.longitude);
+
+  Future<List<LatLng>> _fetchRouteWalking(LatLng origin, LatLng dest) async {
+    if (_gmapsKey.trim().isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Directions API key belum diset. Rute digambar lurus.')),
+        );
+      }
+      return [origin, dest];
+    }
+
+    final uri = Uri.parse(
+      'https://maps.googleapis.com/maps/api/directions/json'
+          '?origin=${origin.latitude},${origin.longitude}'
+          '&destination=${dest.latitude},${dest.longitude}'
+          '&mode=walking&units=metric&key=$_gmapsKey',
+    );
+
+    try {
+      final res = await http.get(uri);
+      if (res.statusCode != 200) return [origin, dest];
+
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if ((j['status'] as String?) != 'OK') return [origin, dest];
+
+      final routes = (j['routes'] as List);
+      if (routes.isEmpty) return [origin, dest];
+
+      // Pakai overview_polyline (cukup halus untuk UI)
+      final overview = routes.first['overview_polyline']?['points'] as String?;
+      if (overview == null) return [origin, dest];
+
+      final pts = _decodePolyline(overview);
+      if (pts.isNotEmpty && (_distM(pts.first, origin) > 5)) pts.insert(0, origin);
+      if (pts.isNotEmpty && (_distM(pts.last, dest) > 5)) pts.add(dest);
+      return pts;
+    } catch (_) {
+      return [origin, dest];
+    }
+  }
+
+  Future<void> _refreshRouteIfNeeded(LatLng me) async {
+    if (_fetching) return;
+    // Reroute jika belum ada rute atau menyimpang > 30 m dari titik awal rute
+    final need = _route.isEmpty || _distM(_route.first, me) > 30;
+    if (!need) return;
+
+    _fetching = true;
+    final pts = await _fetchRouteWalking(me, _target);
+    if (!mounted) {
+      _fetching = false;
+      return;
+    }
+
+    setState(() {
+      _route
+        ..clear()
+        ..addAll(pts);
+      _polylines
+        ..clear()
+        ..add(Polyline(
+          polylineId: const PolylineId('toTarget'),
+          points: List<LatLng>.from(_route),
+          width: 6,
+          color: Colors.blueAccent,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+        ));
+    });
+    _fetching = false;
+  }
+
+  void _updateUser(LatLng me) {
+    setState(() {
+      _markers
+        ..removeWhere((m) => m.markerId.value == 'me')
+        ..add(Marker(
+          markerId: const MarkerId('me'),
+          position: me,
+          infoWindow: const InfoWindow(title: 'Saya'),
+        ));
+
+      _markers
+        ..removeWhere((m) => m.markerId.value == 'target')
+        ..add(Marker(
+          markerId: const MarkerId('target'),
+          position: _target,
+          infoWindow: InfoWindow(
+            title: widget.targetName ?? 'Tujuan',
+            snippet: widget.targetAddress,
+          ),
+        ));
+    });
+
+    // Minta Directions & gambar rute yang belok-belok
+    _refreshRouteIfNeeded(me);
+
+    _fitToBounds(me, _target);
+  }
+
+  Future<void> _fitToBounds(LatLng a, LatLng b) async {
+    if (_map == null) return;
+    final sw = LatLng(
+      (a.latitude <= b.latitude) ? a.latitude : b.latitude,
+      (a.longitude <= b.longitude) ? a.longitude : b.longitude,
+    );
+    final ne = LatLng(
+      (a.latitude >= b.latitude) ? a.latitude : b.latitude,
+      (a.longitude >= b.longitude) ? a.longitude : b.longitude,
+    );
+    await _map!.animateCamera(
+      CameraUpdate.newLatLngBounds(LatLngBounds(southwest: sw, northeast: ne), 60),
+    );
+  }
+
+  @override
+  void dispose() {
+    _posSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _openTurnByTurn() async {
+    // Intent Google Maps (pakai colon ':')
+    final uri1 = Uri.parse('google.navigation:q=${widget.targetLat},${widget.targetLng}&mode=w');
+    if (await canLaunchUrl(uri1)) {
+      await launchUrl(uri1, mode: LaunchMode.externalApplication);
+      return;
+    }
+    // fallback ke URL
+    final uri2 = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1&destination=${widget.targetLat},${widget.targetLng}',
+    );
+    await launchUrl(uri2, mode: LaunchMode.externalApplication);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.targetName ?? 'Arahkan Lokasi'),
+      ),
+      body: GoogleMap(
+        initialCameraPosition: CameraPosition(target: _target, zoom: 14),
+        myLocationEnabled: true,
+        myLocationButtonEnabled: true,
+        markers: _markers,
+        polylines: _polylines,
+        onMapCreated: (c) => _map = c,
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openTurnByTurn,
+        icon: const Icon(Icons.navigation),
+        label: const Text('Mulai Navigasi'),
+      ),
+    );
+  }
+}
+
+/* ===================== MAPS PAGE (Dengan Header Status) ===================== */
 
 // ===== Palette =====
 const _bgBlue = Color(0xFF0B1B4D);
@@ -21,18 +302,32 @@ const _subtle = Color(0xFFBFC3D9);
 const _chipBlue = Color(0xFF3A4C86);
 
 class MapsPageScreen extends StatefulWidget {
-  const MapsPageScreen({super.key});
+  // >>> ADDED: optional target info yang bisa dikirim dari SOS/HomePage
+  final double? targetLat;
+  final double? targetLng;
+  final String? targetName;
+  final String? targetAddress;
+
+  const MapsPageScreen({
+    super.key,
+    this.targetLat,
+    this.targetLng,
+    this.targetName,
+    this.targetAddress,
+  });
 
   @override
   State<MapsPageScreen> createState() => _MapsPageScreenState();
 }
 
-class _MapsPageScreenState extends State<MapsPageScreen>
-    with SingleTickerProviderStateMixin {
-  // Animasi “pulse” untuk indikator status di header
-  late final AnimationController _ctrl;
-  late final Animation<double> _scale;
-  late final Animation<double> _opacity;
+class _MapsPageScreenState extends State<MapsPageScreen> {
+  // (HEADER DATA) — ambil untuk RunaraHeaderSection
+  String _name = '—';
+  String _roleLabel = 'Relawan';
+  int _level = 0;
+  double _progress = 0.0;
+
+  bool get _hasUnread => RunaraNotificationCenter.hasUnread;
 
   // Konversi Position -> LatLng
   LatLng _toLL(Position p) => LatLng(p.latitude, p.longitude);
@@ -43,7 +338,11 @@ class _MapsPageScreenState extends State<MapsPageScreen>
 
   // ====== Tambahan konstanta ======
   static const _arrivalRadiusM = 20.0; // dianggap sampai tujuan < 20 m
-  static const _gmapsKey = 'AIzaSyAJvcttF7c6_0dUOOO0xHQEB9jMpw3EDvo'; // TODO: restrict/rotate sesuai proyekmu
+
+  // ==== Directions KEY (tanpa --dart-define) ====
+  // ⚠️ Batasi key di Google Cloud Console (HTTP referrer / Android & iOS key restriction) ⚠️
+  static const String _gmapsKey = 'AIzaSyAJvcttF7c6_0dUOOO0xHQEB9jMpw3EDvo';
+
   static const double _kcalPerKm = 60.0; // ≈50–70 kkal/km → pakai 60 default
 
   // Stream lokasi & state navigasi
@@ -58,6 +357,7 @@ class _MapsPageScreenState extends State<MapsPageScreen>
   // Jejak pergerakan & rute
   final List<LatLng> _trail = [];      // jejak pengguna (garis hijau)
   List<LatLng> _routeToDest = [];      // rute walking dari Directions API
+  bool _rerouteInFlight = false;
 
   // Metrik live
   double _distanceMeters = 0; // total jarak tempuh
@@ -65,18 +365,31 @@ class _MapsPageScreenState extends State<MapsPageScreen>
   DateTime? _lastFixAt;
   LatLng? _lastFixLatLng;
 
+  // ====== Sesi & anti duplikat simpan ======
+  DateTime? _sessionStartAt;     // waktu mulai tracking
+  bool _savedSession = false;    // agar tidak tersimpan dua kali
+
   // ===== Polyline decoder Google =====
   List<LatLng> _decodePolyline(String encoded) {
-    List<LatLng> points = [];
+    final points = <LatLng>[];
     int index = 0, lat = 0, lng = 0;
     while (index < encoded.length) {
       int b, shift = 0, result = 0;
-      do { b = encoded.codeUnitAt(index++) - 63; result |= (b & 0x1F) << shift; shift += 5; } while (b >= 0x20);
-      int dlat = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1F) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      final dlat = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
       lat += dlat;
-      shift = 0; result = 0;
-      do { b = encoded.codeUnitAt(index++) - 63; result |= (b & 0x1F) << shift; shift += 5; } while (b >= 0x20);
-      int dlng = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
+      shift = 0;
+      result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1F) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      final dlng = ((result & 1) != 0) ? ~(result >> 1) : (result >> 1);
       lng += dlng;
       points.add(LatLng(lat / 1e5, lng / 1e5));
     }
@@ -85,10 +398,10 @@ class _MapsPageScreenState extends State<MapsPageScreen>
 
   // ===== Ambil rute jalan kaki dari Directions API (bukan garis lurus) =====
   Future<List<LatLng>> _fetchRouteWalking(LatLng origin, LatLng dest) async {
-    if (_gmapsKey == 'YOUR_API_KEY' || _gmapsKey.trim().isEmpty) {
+    if (_gmapsKey.trim().isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Directions API key belum diset / tidak valid. Rute digambar lurus sementara.')),
+          const SnackBar(content: Text('Directions API key belum diset. Rute digambar lurus.')),
         );
       }
       return [origin, dest];
@@ -102,26 +415,11 @@ class _MapsPageScreenState extends State<MapsPageScreen>
 
     try {
       final res = await http.get(uri);
-      if (res.statusCode != 200) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Directions gagal (${res.statusCode}). Rute digambar lurus.')),
-          );
-        }
-        return [origin, dest];
-      }
+      if (res.statusCode != 200) return [origin, dest];
 
       final j = jsonDecode(res.body) as Map<String, dynamic>;
       final status = (j['status'] as String?) ?? 'UNKNOWN';
-      if (status != 'OK') {
-        if (mounted) {
-          final msg = j['error_message']?.toString();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Directions: $status${msg != null ? " – $msg" : ""}. Rute digambar lurus.')),
-          );
-        }
-        return [origin, dest];
-      }
+      if (status != 'OK') return [origin, dest];
 
       final routes = (j['routes'] as List);
       final overview = routes.first['overview_polyline']?['points'] as String?;
@@ -132,12 +430,32 @@ class _MapsPageScreenState extends State<MapsPageScreen>
       if (pts.isNotEmpty && (_distM(pts.last, dest) > 5)) pts.add(dest);
       return pts;
     } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Tidak bisa mengambil Directions. Rute digambar lurus.')),
-        );
-      }
       return [origin, dest];
+    }
+  }
+
+  // ==== Reroute bila keluar jalur > 25 m ====
+  Future<void> _maybeReroute() async {
+    if (_rerouteInFlight || _current == null || _destination == null) return;
+    if (_routeToDest.isEmpty) {
+      _rerouteInFlight = true;
+      final pts = await _fetchRouteWalking(_current!, _destination!);
+      if (mounted) setState(() => _routeToDest = pts);
+      _rerouteInFlight = false;
+      return;
+    }
+
+    // cari jarak terdekat dari posisi ke polyline
+    double minDist = double.infinity;
+    for (final p in _routeToDest) {
+      final d = _distM(_current!, p);
+      if (d < minDist) minDist = d;
+    }
+    if (minDist > 25) {
+      _rerouteInFlight = true;
+      final pts = await _fetchRouteWalking(_current!, _destination!);
+      if (mounted) setState(() => _routeToDest = pts);
+      _rerouteInFlight = false;
     }
   }
 
@@ -157,6 +475,11 @@ class _MapsPageScreenState extends State<MapsPageScreen>
 
     _destination = dest;
     _navigating = true;
+
+    // === START SESSION ===
+    _sessionStartAt = DateTime.now();
+    _savedSession   = false;
+
     _distanceMeters = 0;
     _speedKmh = 0;
     _trail.clear();
@@ -183,14 +506,81 @@ class _MapsPageScreenState extends State<MapsPageScreen>
     if (mounted) setState(() {});
   }
 
+  // ===== Simpan aktivitas ke Firestore & siap untuk dilihat di Riwayat =====
+  Future<void> _persistActivity() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final km = _distanceMeters / 1000.0;
+      final durSec = _sessionStartAt == null
+          ? 0
+          : DateTime.now().difference(_sessionStartAt!).inSeconds;
+      final cal = (km * _kcalPerKm).round();
+
+      final route = _trail.map((p) => GeoPoint(p.latitude, p.longitude)).toList();
+
+      // relawan => "guide", lainnya "walk"
+      final type = _roleLabel.toLowerCase() == 'relawan' ? 'guide' : 'walk';
+      final title = type == 'guide' ? 'Pendampingan' : 'Jalan';
+
+      final data = {
+        'ownerUid'  : uid,
+        'type'      : type,
+        'title'     : title,
+        'location'  : _destination != null
+            ? '${_destination!.latitude.toStringAsFixed(5)}, ${_destination!.longitude.toStringAsFixed(5)}'
+            : '',
+        'date'      : Timestamp.now(),
+        'distance_m': _distanceMeters.round(),
+        'duration_s': durSec,
+        'calories'  : cal,
+        'route'     : route,
+        'notes'     : null,
+      };
+
+      await FirebaseFirestore.instance.collection('activities').add(data);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal menyimpan riwayat: $e')),
+        );
+      }
+    }
+  }
+
   void _stopTracking({bool arrived = false}) {
+    // Jika benar-benar sampai, simpan sekali & buka Riwayat
+    if (!_savedSession) {
+      _savedSession = true;
+      _persistActivity().then((_) async {
+        if (!mounted) return;
+
+        // (Opsional) reset state agar sesi berikutnya bersih
+        _distanceMeters = 0;
+        _speedKmh = 0;
+        _sessionStartAt = null;
+        _destination = null;
+        _routeToDest.clear();
+        _trail.clear();
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sudah sampai tujuan ✅ — disimpan ke riwayat')),
+        );
+
+        await Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const RiwayatAktivitasPageScreen()),
+        );
+      });
+    }
+
     _navigating = false;
     _posSub?.cancel();
     _posSub = null;
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(arrived ? 'Sudah sampai tujuan ✅' : 'Tracking dihentikan.')),
-      );
+      if (!arrived) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Tracking dihentikan.')),
+        );
+      }
       setState(() {});
     }
   }
@@ -218,12 +608,13 @@ class _MapsPageScreenState extends State<MapsPageScreen>
     _mapCtrl?.animateCamera(CameraUpdate.newLatLng(here));
 
     if (_navigating && _destination != null) {
+      // cek reroute (tanpa await agar tidak blok UI)
+      _maybeReroute();
+
+      // sampai tujuan?
       final remain = _remainingOnRouteMeters();
       if (remain <= _arrivalRadiusM) _stopTracking(arrived: true);
     }
-
-    // OPTIONAL sinkron Firestore (throttle bila perlu)
-    // FirebaseFirestore.instance.collection('live_metrics').doc('current').set({...});
 
     if (mounted) setState(() {});
   }
@@ -239,7 +630,10 @@ class _MapsPageScreenState extends State<MapsPageScreen>
     double best = double.infinity;
     for (int i = 0; i < _routeToDest.length; i++) {
       final d = _distM(_current!, _routeToDest[i]);
-      if (d < best) { best = d; nearest = i; }
+      if (d < best) {
+        best = d;
+        nearest = i;
+      }
     }
     double remain = _distM(_current!, _routeToDest[nearest]);
     for (int i = nearest; i < _routeToDest.length - 1; i++) {
@@ -251,30 +645,62 @@ class _MapsPageScreenState extends State<MapsPageScreen>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
-    final curve = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
-    _scale = Tween<double>(begin: 0.8, end: 1.4).animate(curve);
-    _opacity = Tween<double>(begin: 0.75, end: 0.0).animate(curve);
     _ensureLocationPermission();
+    _initHeaderData(); // <-- ambil nama/role untuk header
+    // >>> ADDED: auto-mulai tracking bila ada target dari constructor
+    if (widget.targetLat != null && widget.targetLng != null) {
+      Future.microtask(
+            () => _startTrackingTo(LatLng(widget.targetLat!, widget.targetLng!)),
+      );
+    }
+  }
+
+  Future<void> _initHeaderData() async {
+    final u = FirebaseAuth.instance.currentUser;
+    var name = (u?.displayName ?? '').trim();
+    if (name.isEmpty) {
+      final email = (u?.email ?? '').trim();
+      name = email.isNotEmpty ? email.split('@').first : 'User';
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final roleKey = 'user_role_${u?.uid ?? 'local'}';
+    final roleStr = prefs.getString(roleKey) ?? 'relawan';
+
+    if (!mounted) return;
+    setState(() {
+      _name = name;
+      _roleLabel = roleStr == 'tunanetra' ? 'Tunanetra' : 'Relawan';
+      _level = 0;
+      _progress = 0;
+    });
   }
 
   Future<void> _ensureLocationPermission() async {
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) { setState(() => _locationGranted = false); return; }
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.deniedForever || permission == LocationPermission.denied) {
-        setState(() => _locationGranted = false); return;
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() => _locationGranted = false);
+        return;
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.deniedForever ||
+          permission == LocationPermission.denied) {
+        setState(() => _locationGranted = false);
+        return;
       }
       setState(() => _locationGranted = true);
-    } catch (_) { setState(() => _locationGranted = false); }
+    } catch (_) {
+      setState(() => _locationGranted = false);
+    }
   }
 
   @override
   void dispose() {
     _posSub?.cancel();
-    _ctrl.dispose();
     _mapCtrl?.dispose();
     super.dispose();
   }
@@ -284,12 +710,12 @@ class _MapsPageScreenState extends State<MapsPageScreen>
   String _fmtSpeed(double v) => '${v.toStringAsFixed(0).replaceAll('.', ',')} km/jam';
   String _fmtKcal(double v) => '${v.toStringAsFixed(0).replaceAll('.', ',')} kkal';
 
-  // >>> ADDED: English formatters (tidak mengubah yang lama)
+  // English formatters
   String _fmtKmEN(double v) => '${v.toStringAsFixed(1)} km';
   String _fmtSpeedEN(double v) => '${v.toStringAsFixed(0)} km/h';
   String _fmtKcalEN(double v) => '${v.toStringAsFixed(0)} kcal';
 
-  // >>> ADDED: Hard stop that also clears state & uses English snackbar
+  // Hard stop that also clears state
   void _stopTrackingHard() {
     _posSub?.cancel();
     _posSub = null;
@@ -355,11 +781,6 @@ class _MapsPageScreenState extends State<MapsPageScreen>
       final lat = (data['target_lat'] as num?)?.toDouble();
       final lng = (data['target_lng'] as num?)?.toDouble();
       if (lat != null && lng != null) {
-        set.add(const Marker(
-          markerId: MarkerId('target'),
-          position: LatLng(0, 0), // akan di-override di builder kalau ada
-          infoWindow: InfoWindow(title: 'Target'),
-        ));
         set.removeWhere((m) => m.markerId.value == 'target');
         set.add(Marker(
           markerId: const MarkerId('target'),
@@ -398,10 +819,15 @@ class _MapsPageScreenState extends State<MapsPageScreen>
     };
   }
 
+  final u = FirebaseAuth.instance.currentUser;
+
+  Future<void> _openNotifications() async {
+    await RunaraNotificationCenter.open(context);
+    if (mounted) setState(() {}); // refresh badge
+  }
+
   @override
   Widget build(BuildContext context) {
-    final topPad = MediaQuery.of(context).padding.top;
-
     return Scaffold(
       backgroundColor: _bgBlue,
       body: Stack(
@@ -419,10 +845,29 @@ class _MapsPageScreenState extends State<MapsPageScreen>
             bottom: false,
             child: Column(
               children: [
-                // ===== Header (punya animasi status) =====
-                Padding(
-                  padding: EdgeInsets.fromLTRB(16, (topPad > 0 ? 12 : 20), 16, 10),
-                  child: _HeaderWithStatus(scale: _scale, opacity: _opacity),
+                // ===== Header reusable: ganti bell dengan status berjalan/tidak berjalan
+                RunaraHeaderSection(
+                  greeting: runaraGreetingIndo(DateTime.now()),
+                  emoji: runaraGreetingEmoji(DateTime.now()),
+                  userName: _name,
+                  roleLabel: _roleLabel,
+                  level: _level,
+                  progress: _progress,
+                  hasUnread: _hasUnread,
+                  onTapBell: () {}, // trailing menggantikan bell
+                  photoUrl: u?.photoURL, // ⬅️ foto sesuai akun
+                  trailing: _StatusPill(
+                    running: _navigating,
+                    onTap: () {
+                      if (_navigating) {
+                        _stopTrackingHard();
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Pilih lokasi di peta untuk mulai.')),
+                        );
+                      }
+                    },
+                  ),
                 ),
 
                 // ===== Google Map + overlay Firestore =====
@@ -482,7 +927,7 @@ class _MapsPageScreenState extends State<MapsPageScreen>
                               Polyline(
                                 polylineId: const PolylineId('route_to_dest'),
                                 points: List<LatLng>.from(_routeToDest),
-                                width: 5,
+                                width: 6,
                                 color: Colors.blueAccent,
                                 startCap: Cap.roundCap,
                                 endCap: Cap.roundCap,
@@ -505,7 +950,13 @@ class _MapsPageScreenState extends State<MapsPageScreen>
                                   target: center,
                                   zoom: 15,
                                 ),
-                                onMapCreated: (c) async { _mapCtrl = c; },
+                                onMapCreated: (c) async {
+                                  _mapCtrl = c;
+                                  // >>> ADDED: jika ada target dari constructor dan belum mulai, mulai tracking
+                                  if (widget.targetLat != null && widget.targetLng != null && !_navigating) {
+                                    await _startTrackingTo(LatLng(widget.targetLat!, widget.targetLng!));
+                                  }
+                                },
                                 myLocationEnabled: _locationGranted,
                                 myLocationButtonEnabled: true,
                                 zoomControlsEnabled: false,
@@ -559,7 +1010,7 @@ class _MapsPageScreenState extends State<MapsPageScreen>
                                 ),
                               ),
 
-                              // >>> ADDED: Stop button on the LEFT (works + clears state)
+                              // >>> Optional: Stop button kiri
                               if (_navigating)
                                 Positioned(
                                   top: 12,
@@ -581,60 +1032,6 @@ class _MapsPageScreenState extends State<MapsPageScreen>
                                     ),
                                   ),
                                 ),
-
-                              // >>> ADDED: Block clicks on the old right Stop (visual tetap, tapi tidak bisa ditekan)
-                              if (_navigating)
-                                Positioned(
-                                  top: 8,
-                                  right: 8,
-                                  child: AbsorbPointer(
-                                    absorbing: true,
-                                    child: SizedBox(width: 140, height: 52),
-                                  ),
-                                ),
-
-                              // >>> ADDED: English metrics panel with icons (overlaying above the old panel)
-                              Positioned(
-                                left: 0,
-                                right: 0,
-                                bottom: 16,
-                                child: Center(
-                                  child: Container(
-                                    width: MediaQuery.of(context).size.width * 0.9,
-                                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF0B1E3D).withOpacity(0.96),
-                                      borderRadius: BorderRadius.circular(14),
-                                      boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 12)],
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        _MetricIconCol(
-                                          icon: Icons.directions_walk,
-                                          label: 'Distance',
-                                          value: _fmtKmEN(distanceKmLocal),
-                                        ),
-                                        _MetricIconCol(
-                                          icon: Icons.route,
-                                          label: 'Remaining',
-                                          value: _fmtKmEN(remainKm.isFinite && remainKm >= 0 ? remainKm : 0),
-                                        ),
-                                        _MetricIconCol(
-                                          icon: Icons.speed,
-                                          label: 'Speed',
-                                          value: _fmtSpeedEN(speedKmhLocal.isFinite ? speedKmhLocal : 0),
-                                        ),
-                                        _MetricIconCol(
-                                          icon: Icons.local_fire_department,
-                                          label: 'Calories',
-                                          value: _fmtKcalEN(kcal.isFinite ? kcal : 0),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
                             ],
                           );
                         },
@@ -650,165 +1047,6 @@ class _MapsPageScreenState extends State<MapsPageScreen>
 
       // ===== Bottom nav pakai RunaraThinNav =====
       bottomNavigationBar: const RunaraThinNav(current: AppTab.maps),
-    );
-  }
-}
-
-/* ================== Header dengan status (animasi) ================== */
-
-class _HeaderWithStatus extends StatelessWidget {
-  final Animation<double> scale;
-  final Animation<double> opacity;
-
-  const _HeaderWithStatus({required this.scale, required this.opacity});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _cardBlue.withOpacity(.72),
-        borderRadius: BorderRadius.circular(22),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Avatar "H"
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: const Color(0xFF2B3B7A),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white24, width: 2),
-            ),
-            alignment: Alignment.center,
-            child: const Text(
-              'H',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 24),
-            ),
-          ),
-          const SizedBox(width: 14),
-
-          // Teks + badge + progress
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: const [
-                    Text('Selamat malam', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15)),
-                    SizedBox(width: 6),
-                    Text('🌙', style: TextStyle(fontSize: 16)),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: const [
-                    Text('Hilda Afiah', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17, height: 1.05)),
-                    SizedBox(width: 6),
-                    _RoleBadge(text: 'Relawan', fontSize: 11),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    const Icon(Icons.shield_rounded, size: 16, color: _subtle),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Stack(
-                        children: [
-                          Container(
-                            height: 8,
-                            decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(20)),
-                          ),
-                          FractionallySizedBox(
-                            widthFactor: .60,
-                            child: Container(
-                              height: 8,
-                              decoration: BoxDecoration(color: _chipBlue, borderRadius: BorderRadius.circular(20)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    const Text('LV.0', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(width: 12),
-
-          // Status: “Berjalan” + pulse ring
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Berjalan', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 12)),
-              const SizedBox(height: 6),
-              SizedBox(
-                width: 20,
-                height: 20,
-                child: Stack(
-                  alignment: Alignment.center,
-                  clipBehavior: Clip.none,
-                  children: [
-                    AnimatedBuilder(
-                      animation: scale,
-                      builder: (context, _) {
-                        return Opacity(
-                          opacity: opacity.value,
-                          child: Transform.scale(
-                            scale: scale.value,
-                            child: Container(
-                              width: 24,
-                              height: 24,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(color: const Color(0xFF22C55E), width: 2),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    Container(
-                      width: 20,
-                      height: 20,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF22C55E),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RoleBadge extends StatelessWidget {
-  final String text;
-  final double fontSize;
-  const _RoleBadge({required this.text, this.fontSize = 11});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
-      decoration: BoxDecoration(color: _chipBlue, borderRadius: BorderRadius.circular(8)),
-      child: Text(
-        text,
-        style: TextStyle(color: Colors.white, fontSize: fontSize, fontWeight: FontWeight.w800, height: 1.0),
-      ),
     );
   }
 }
@@ -836,7 +1074,7 @@ class _MetricCol extends StatelessWidget {
   }
 }
 
-// >>> ADDED: Metric with leading icon (English panel)
+// Metric with leading icon (English panel) — jika suatu saat dibutuhkan
 class _MetricIconCol extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -864,6 +1102,51 @@ class _MetricIconCol extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/* ===================== Header Trailing: Status Pill ===================== */
+
+class _StatusPill extends StatelessWidget {
+  final bool running;
+  final VoidCallback? onTap;
+  const _StatusPill({required this.running, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = running ? const Color(0xFF22C55E) : Colors.white10;
+    final border = running ? Colors.transparent : Colors.white24;
+    final label = running ? 'Run' : 'Not Run';
+    final icon = running ? Icons.directions_walk : Icons.pause_circle_outline;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: border, width: 1.2),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 18, color: running ? Colors.white : Colors.white70),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: running ? Colors.white : Colors.white70,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

@@ -1,153 +1,181 @@
+// lib/screen/ProfilePageScreen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'widget/runara_thin_nav.dart';
-import 'widget/runara_header.dart'; // RunaraHeaderSection, RunaraNotificationSheet, AppNotification
 
-/// ===== Colors =====
-const _bgBlue = Color(0xFF0B1B4D);
-const _navBlue = Color(0xFF001A4D);
-const _chipBlue = Color(0xFF4B5B9E);
-const _barTrack = Color(0xFF2B3B7A);
-const _barFill = Color(0xFF4B5E9D);
-const _gold = Color(0xFFFFB800);
+import 'widget/runara_thin_nav.dart';
+import 'widget/runara_header.dart';
+import 'SettingsPageScreen.dart';
+
+/// ===== Colors / Tokens =====
+const _bgBlue   = Color(0xFF0B1B4D);
+const _cardBlue = Color(0xFF152449);
+const _gold     = Color(0xFFFFC42E);
+const _accent   = Color(0xFF7B8AFF);
+const _chip     = Color(0xFF3A4C86);
+const _subtle   = Color(0xFFBFC3D9);
 
 class ProfilePageScreen extends StatefulWidget {
   const ProfilePageScreen({super.key});
-
   @override
   State<ProfilePageScreen> createState() => _ProfilePageScreenState();
 }
 
-class _ProfilePageScreenState extends State<ProfilePageScreen> with SingleTickerProviderStateMixin {  // Pastikan menambahkan `with SingleTickerProviderStateMixin`
-  late final AnimationController _pulseCtrl;
-  late final Animation<double> _scale;
-  late final Animation<double> _opacity;
-
+class _ProfilePageScreenState extends State<ProfilePageScreen> {
+  // header data
   String _name = '—';
   String _roleLabel = 'Relawan';
   int _level = 0;
   double _progress = 0;
-  final List<AppNotification> _notifs = [];
+  DateTime? _joinedAt;
 
-  bool get _hasUnread => _notifs.any((n) => !n.read);
+  // edit mode
+  bool _editing = false;
 
-  bool _isEditing = false;
+  // controllers
+  final _nameCtl     = TextEditingController();
+  final _ageCtl      = TextEditingController();
+  final _jobCtl      = TextEditingController();
+  final _hobbyCtl    = TextEditingController();
+  final _locationCtl = TextEditingController();
 
-  // Controllers for text fields
-  TextEditingController _nameController = TextEditingController();
-  TextEditingController _ageController = TextEditingController();
-  TextEditingController _jobController = TextEditingController();
-  TextEditingController _hobbyController = TextEditingController();
-  TextEditingController _locationController = TextEditingController();
+  // prefs keys
+  static const _kName     = 'profile_name';
+  static const _kAge      = 'profile_age';
+  static const _kJob      = 'profile_job';
+  static const _kHobby    = 'profile_hobby';
+  static const _kLocation = 'profile_location';
 
   @override
   void initState() {
     super.initState();
-
-    // Animation for small status
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);  // `vsync: this` is valid now
-    final curve = CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut);
-    _scale = Tween<double>(begin: .8, end: 1.4).animate(curve);
-    _opacity = Tween<double>(begin: .75, end: 0).animate(curve);
-
-    _initHeaderData();
-    _seedDemoNotifications();
-  }
-
-  void _toggleEditMode() {
-    setState(() {
-      _isEditing = !_isEditing;
-    });
+    _bootstrap();
   }
 
   @override
   void dispose() {
-    _pulseCtrl.dispose();
-    _nameController.dispose();
-    _ageController.dispose();
-    _jobController.dispose();
-    _hobbyController.dispose();
-    _locationController.dispose();
+    _nameCtl.dispose();
+    _ageCtl.dispose();
+    _jobCtl.dispose();
+    _hobbyCtl.dispose();
+    _locationCtl.dispose();
     super.dispose();
   }
 
-  Future<void> _initHeaderData() async {
+  Future<void> _bootstrap() async {
     final u = FirebaseAuth.instance.currentUser;
-    var name = (u?.displayName ?? '').trim();
-    if (name.isEmpty) {
+
+    var display = (u?.displayName ?? '').trim();
+    if (display.isEmpty) {
       final email = (u?.email ?? '').trim();
-      name = email.isNotEmpty ? email.split('@').first : 'User';
+      display = email.isNotEmpty ? email.split('@').first : 'User';
     }
 
     final prefs = await SharedPreferences.getInstance();
     final roleKey = 'user_role_${u?.uid ?? 'local'}';
     final roleStr = prefs.getString(roleKey) ?? 'relawan';
 
+    // load saved fields (fallback ke akun)
+    _nameCtl.text     = prefs.getString(_kName)     ?? display;
+    _ageCtl.text      = prefs.getString(_kAge)      ?? '22 Tahun';
+    _jobCtl.text      = prefs.getString(_kJob)      ?? 'Seniman';
+    _hobbyCtl.text    = prefs.getString(_kHobby)    ?? 'Bermusik';
+    _locationCtl.text = prefs.getString(_kLocation) ?? 'Kota Bandung';
+
+    if (!mounted) return;
     setState(() {
-      _name = name;
+      _name      = _nameCtl.text;
       _roleLabel = roleStr == 'tunanetra' ? 'Tunanetra' : 'Relawan';
-      _level = 0;
-      _progress = 0;
-      _nameController.text = _name;
-      _ageController.text = '22 Tahun';
-      _jobController.text = 'Seniman';
-      _hobbyController.text = 'Bermusik';
-      _locationController.text = 'Kota Bandung';
+      _level     = 0;
+      _progress  = 0;
+      _joinedAt  = u?.metadata.creationTime;
     });
   }
 
-  void _seedDemoNotifications() {
-    if (_notifs.isEmpty) {
-      _notifs.addAll([
-        AppNotification(
-          title: 'Tips Hari Ini 💡',
-          body: 'Coba pemanasan 5 menit sebelum berlari.',
-          time: DateTime.now().subtract(const Duration(hours: 2)),
-          read: true,
-        ),
-        AppNotification(
-          title: 'Jadwal Mendatang',
-          body: 'Pendampingan Jumat 06:20 di GBK. Siapkan perlengkapan ya!',
-          time: DateTime.now().subtract(const Duration(days: 1, hours: 1)),
-          read: false,
-        ),
-      ]);
+  String _fmtJoin(DateTime? d) {
+    if (d == null) return '—';
+    return '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+  }
+
+  Future<void> _save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kName,     _nameCtl.text.trim());
+    await prefs.setString(_kAge,      _ageCtl.text.trim());
+    await prefs.setString(_kJob,      _jobCtl.text.trim());
+    await prefs.setString(_kHobby,    _hobbyCtl.text.trim());
+    await prefs.setString(_kLocation, _locationCtl.text.trim());
+
+    // update Firebase displayName (best effort)
+    final u = FirebaseAuth.instance.currentUser;
+    if (u != null) {
+      try { await u.updateDisplayName(_nameCtl.text.trim()); } catch (_) {}
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _name = _nameCtl.text.trim().isEmpty ? '—' : _nameCtl.text.trim();
+      _editing = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Profil disimpan.')),
+    );
+  }
+
+  void _cancel() => setState(() => _editing = false);
+
+  Future<void> _logout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _cardBlue,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Keluar Akun',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+        content: const Text('Yakin ingin keluar?',
+            style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(onPressed: ()=>Navigator.pop(ctx,false), child: const Text('Batal')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE11D48)),
+            onPressed: ()=>Navigator.pop(ctx,true),
+            child: const Text('Keluar'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      // langsung ke halaman sign-in — pastikan route '/signin' terdaftar di MaterialApp
+      Navigator.of(context).pushNamedAndRemoveUntil('/signin', (_) => false);
     }
   }
 
-  Future<void> _openNotifications() async {
-    final changed = await RunaraNotificationSheet.show(
-      context,
-      notifs: _notifs,
-      onMarkAllRead: () {
-        for (final n in _notifs) n.read = true;
-      },
-      onTapItem: (i) => _notifs[i].read = true,
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SettingsPageScreen()),
     );
-    if (changed == true && mounted) setState(() {});
   }
 
-  String _greetingIndo(DateTime now) {
-    final h = now.hour;
-    if (h >= 5 && h < 11) return 'Selamat pagi';
-    if (h >= 11 && h < 15) return 'Selamat siang';
-    if (h >= 15 && h < 18) return 'Selamat sore';
-    return 'Selamat malam';
-  }
-
-  String _greetingEmoji(DateTime now) {
-    final h = now.hour;
-    if (h >= 5 && h < 11) return '☀️';
-    if (h >= 11 && h < 15) return '🌤️';
-    if (h >= 15 && h < 18) return '🌇';
-    return '🌙';
+  // Demo jadwal sederhana (statik)
+  List<_Schedule> _demoSchedules() {
+    final now = DateTime.now();
+    DateTime d(int addDays) => DateTime(now.year, now.month, now.day + addDays);
+    return [
+      _Schedule(date: d(1), start: '06:20', end: '07:30', place: 'GBK – Senayan', role: 'Tunanetra'),
+      _Schedule(date: d(4), start: '16:30', end: '17:45', place: 'Lap. Saparua', role: 'Relawan'),
+      _Schedule(date: d(7), start: '06:00', end: '07:15', place: 'GOR Pajajaran', role: 'Tunanetra'),
+    ];
   }
 
   @override
   Widget build(BuildContext context) {
+    final kb = MediaQuery.of(context).viewInsets.bottom; // tinggi keyboard (untuk padding dinamis)
+    final u = FirebaseAuth.instance.currentUser;
+
     return Scaffold(
       backgroundColor: _bgBlue,
+      resizeToAvoidBottomInset: true,
       body: Stack(
         children: [
           Positioned.fill(
@@ -159,104 +187,173 @@ class _ProfilePageScreenState extends State<ProfilePageScreen> with SingleTicker
           ),
           SafeArea(
             bottom: false,
-            child: SingleChildScrollView(  // Pastikan konten dapat digulir
-              child: Column(
-                children: [
-                  SliverToBoxAdapter(
-                    child: RunaraHeaderSection(
-                      greeting: _greetingIndo(DateTime.now()),
-                      emoji: _greetingEmoji(DateTime.now()),
-                      userName: _name,
-                      roleLabel: _roleLabel,
-                      level: _level,
-                      progress: _progress,
-                      hasUnread: _hasUnread,
-                      onTapBell: _openNotifications,
+            child: CustomScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              slivers: [
+                // ===== Header (RunaraHeaderSection saja)
+                SliverToBoxAdapter(
+                  child: RunaraHeaderSection(
+                    greeting: runaraGreetingIndo(DateTime.now()),
+                    emoji:    runaraGreetingEmoji(DateTime.now()),
+                    userName: _name,
+                    roleLabel: _roleLabel,
+                    level: _level,
+                    progress: _progress,
+                    hasUnread: RunaraNotificationCenter.hasUnread,
+                    onTapBell: () async {
+                      final changed = await RunaraNotificationCenter.open(context);
+                      if (changed == true && mounted) setState(() {});
+                    },
+                    photoUrl: u?.photoURL, // avatar dari akun
+                  ),
+                ),
+
+                // ===== Data Diri
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Data Diri',
+                          style: TextStyle(color: _gold, fontWeight: FontWeight.w700, fontSize: 14),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: ()=> setState(()=> _editing = !_editing),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          ),
+                          child: Text(_editing ? 'Tutup' : 'Ubah'),
+                        ),
+                      ],
                     ),
                   ),
-                  // ===== DATA DIRI
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _TwoByBars(
+                      editing: _editing,
+                      bars: [
+                        _BarSpec(icon: Icons.badge_outlined,    label: 'Nama Lengkap', controller: _nameCtl),
+                        _BarSpec(icon: Icons.cake_outlined,     label: 'Umur',          controller: _ageCtl),
+                        _BarSpec(icon: Icons.work_outline,      label: 'Pekerjaan',     controller: _jobCtl),
+                        _BarSpec(icon: Icons.interests_outlined,label: 'Hobi',          controller: _hobbyCtl),
+                        _BarSpec(icon: Icons.location_on,       label: 'Lokasi',        controller: _locationCtl),
+                        _BarSpec(icon: Icons.event_available,   label: 'Bergabung',     valueText: _fmtJoin(_joinedAt)),
+                      ],
+                    ),
+                  ),
+                ),
+
+                if (_editing)
                   SliverToBoxAdapter(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text('Data Diri', style: TextStyle(color: _gold, fontWeight: FontWeight.w600, fontSize: 14)),
-                          TextButton(
-                            onPressed: () {
-                              _toggleEditMode();  // Fungsi untuk mengubah mode edit
-                            },
-                            style: TextButton.styleFrom(
-                              foregroundColor: _gold,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                              textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: _cancel,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                side: const BorderSide(color: Colors.white24),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: const Text('Batal'),
                             ),
-                            child: const Text('Ubah'),
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: GridView.count(
-                        physics: const NeverScrollableScrollPhysics(),
-                        crossAxisCount: 3,
-                        childAspectRatio: 1.9,
-                        shrinkWrap: true,
-                        crossAxisSpacing: 14,
-                        mainAxisSpacing: 10,
-                        children: [
-                          _InfoItem(
-                            title: 'Nama Lengkap',
-                            value: _editableField(_nameController, fontSize: 12),
-                          ),
-                          _InfoItem(
-                            title: 'Umur',
-                            value: _editableField(_ageController, fontSize: 12),
-                          ),
-                          _InfoItem(
-                            title: 'Bergabung',
-                            value: Text(
-                              '02/04/2025',
-                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: _save,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _accent,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              child: const Text('Simpan Perubahan', style: TextStyle(fontWeight: FontWeight.w800)),
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                  // Move "Pekerjaan", "Hobby", and "Lokasi" Down
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: GridView.count(
-                        physics: const NeverScrollableScrollPhysics(),
-                        crossAxisCount: 3,
-                        childAspectRatio: 1.9,
-                        shrinkWrap: true,
-                        crossAxisSpacing: 20,
-                        mainAxisSpacing: 5,
-                        children: [
-                          _InfoItem(
-                            title: 'Pekerjaan',
-                            value: _editableField(_jobController, fontSize: 14),
-                          ),
-                          _InfoItem(
-                            title: 'Hobby',
-                            value: _editableField(_hobbyController, fontSize: 14),
-                          ),
-                          _InfoItem(
-                            title: 'Lokasi',
-                            value: _editableField(_locationController, fontSize: 14),
-                          ),
-                        ],
-                      ),
+
+                const SliverToBoxAdapter(child: SizedBox(height: 20)),
+
+                // ===== Jadwal Pendampingan (rapi, non-klik)
+                const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Row(
+                      children: [
+                        Text(
+                          'Jadwal Pendampingan',
+                          style: TextStyle(color: _gold, fontWeight: FontWeight.w700, fontSize: 14),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-              ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _ScheduleSection(items: _demoSchedules()),
+                  ),
+                ),
+
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+
+                // ===== Actions bawah: Pengaturan & Keluar
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: OutlinedButton.icon(
+                            onPressed: _openSettings,
+                            icon: const Icon(Icons.settings),
+                            label: const Text('Pengaturan'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(color: Colors.white24),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 48,
+                          child: ElevatedButton.icon(
+                            onPressed: _logout,
+                            icon: const Icon(Icons.logout_rounded),
+                            label: const Text('Keluar'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFE11D48),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Padding dinamis setinggi keyboard untuk cegah overflow
+                SliverPadding(
+                  padding: EdgeInsets.only(bottom: 24 + kb),
+                ),
+              ],
             ),
           ),
         ],
@@ -264,42 +361,283 @@ class _ProfilePageScreenState extends State<ProfilePageScreen> with SingleTicker
       bottomNavigationBar: const RunaraThinNav(current: AppTab.profile),
     );
   }
+}
 
-  Widget _editableField(TextEditingController controller, {required int fontSize}) {
-    return _isEditing
-        ? TextField(
-      controller: controller,
-      style: TextStyle(color: Colors.white, fontSize: fontSize.toDouble()),
-      decoration: InputDecoration(
-        contentPadding: EdgeInsets.only(top: 0, bottom: 0),  // Menyesuaikan padding
-        hintText: controller.text,
-        hintStyle: TextStyle(color: Colors.white, fontSize: fontSize.toDouble()),
-        border: InputBorder.none,  // Tidak ada border saat mode edit
-        enabledBorder: InputBorder.none,  // Tidak ada border saat tidak fokus
-        focusedBorder: InputBorder.none,  // Tidak ada border saat fokus
-      ),
-    )
-        : Text(
-      controller.text,
-      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: fontSize.toDouble()),
+/// ==== “2 bar per baris” layout ====
+class _BarSpec {
+  final IconData icon;
+  final String label;
+  final TextEditingController? controller; // kalau null → static
+  final String? valueText;                 // untuk static display
+  _BarSpec({
+    required this.icon,
+    required this.label,
+    this.controller,
+    this.valueText,
+  });
+}
+
+class _TwoByBars extends StatelessWidget {
+  final bool editing;
+  final List<_BarSpec> bars;
+  const _TwoByBars({required this.editing, required this.bars});
+
+  @override
+  Widget build(BuildContext context) {
+    const gap = 12.0;
+    return LayoutBuilder(
+      builder: (ctx, c) {
+        final w = c.maxWidth;
+        const columns = 2; // dua per baris
+        final barWidth = (w - gap * (columns - 1)) / columns;
+
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: bars.map((b) {
+            return SizedBox(
+              width: barWidth,
+              child: _InfoBar(
+                icon: b.icon,
+                label: b.label,
+                controller: b.controller,
+                staticText: b.valueText,
+                editing: editing && b.controller != null, // "Bergabung" tetap statis
+              ),
+            );
+          }).toList(),
+        );
+      },
     );
   }
 }
 
-class _InfoItem extends StatelessWidget {
-  final String title;
-  final Widget value;
+class _InfoBar extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final TextEditingController? controller;
+  final String? staticText;
+  final bool editing;
 
-  const _InfoItem({required this.title, required this.value});
+  const _InfoBar({
+    required this.icon,
+    required this.label,
+    required this.controller,
+    required this.staticText,
+    required this.editing,
+  });
 
   @override
   Widget build(BuildContext context) {
+    return Container(
+      height: 66,
+      decoration: BoxDecoration(
+        color: _cardBlue,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 36, height: 36,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            alignment: Alignment.center,
+            child: Icon(icon, color: Colors.white, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _gold, fontWeight: FontWeight.w600, fontSize: 11),
+                ),
+                const SizedBox(height: 6),
+                editing
+                    ? SizedBox(
+                  height: 24,
+                  child: TextField(
+                    controller: controller!,
+                    maxLines: 1,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                      height: 1.0,
+                    ),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(.06),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                )
+                    : Text(
+                  controller?.text ?? (staticText ?? '—'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// ==== Jadwal (rapi, non-klik) ====
+class _Schedule {
+  final DateTime date;
+  final String start, end, place, role;
+  _Schedule({
+    required this.date,
+    required this.start,
+    required this.end,
+    required this.place,
+    required this.role,
+  });
+}
+
+class _ScheduleSection extends StatelessWidget {
+  final List<_Schedule> items;
+  const _ScheduleSection({required this.items});
+
+  String _wkId(int w) {
+    const m = {1:'Sen',2:'Sel',3:'Rab',4:'Kam',5:'Jum',6:'Sab',7:'Min'};
+    return m[w]!;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 28),
+        alignment: Alignment.center,
+        child: const Text('Tidak ada jadwal.', style: TextStyle(color: Colors.white70)),
+      );
+    }
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title, style: const TextStyle(color: _gold, fontWeight: FontWeight.w600, fontSize: 12)),
-        value,  // Display the widget (editable field or text)
+        for (final s in items) ...[
+          _ScheduleItem(
+            dayShort: _wkId(s.date.weekday),
+            dayNum: s.date.day.toString().padLeft(2,'0'),
+            start: s.start,
+            end: s.end,
+            place: s.place,
+            role: s.role,
+          ),
+          const SizedBox(height: 10),
+        ]
       ],
+    );
+  }
+}
+
+class _ScheduleItem extends StatelessWidget {
+  final String dayShort;
+  final String dayNum;
+  final String start, end, place, role;
+  const _ScheduleItem({
+    required this.dayShort,
+    required this.dayNum,
+    required this.start,
+    required this.end,
+    required this.place,
+    required this.role,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 80,
+      decoration: BoxDecoration(
+        color: _cardBlue,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white12),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          // Tanggal
+          Container(
+            width: 56,
+            decoration: BoxDecoration(
+              color: _chip.withOpacity(.5),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(dayShort, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: 12)),
+                const SizedBox(height: 2),
+                Text(dayNum, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+
+          // Detail
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  const Icon(Icons.access_time, size: 16, color: Colors.white70),
+                  const SizedBox(width: 6),
+                  Text('$start – $end', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+                ]),
+                const SizedBox(height: 6),
+                Row(children: [
+                  const Icon(Icons.place_rounded, size: 16, color: Colors.white70),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      place,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          ),
+
+          // Role pill (kanan)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white10,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: Text(role, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
     );
   }
 }

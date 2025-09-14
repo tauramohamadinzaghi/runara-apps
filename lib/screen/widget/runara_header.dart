@@ -46,6 +46,12 @@ class RunaraHeader extends StatelessWidget {
   final double progress;
   final bool hasUnread;
   final VoidCallback onTapBell;
+  /// Widget opsional untuk mengganti tombol kanan (mis. status Berjalan/Tidak berjalan).
+  /// Jika `null`, akan menampilkan bel notifikasi default.
+  final Widget? trailing;
+
+  /// ⬇️ Baru: URL foto profil (mis. dari FirebaseAuth.instance.currentUser.photoURL)
+  final String? photoUrl;
 
   const RunaraHeader({
     super.key,
@@ -57,6 +63,8 @@ class RunaraHeader extends StatelessWidget {
     required this.progress,
     required this.hasUnread,
     required this.onTapBell,
+    this.trailing,
+    this.photoUrl, // <-- baru
   });
 
   @override
@@ -70,7 +78,7 @@ class RunaraHeader extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // avatar
+          // ===== AVATAR (pakai fotoUrl kalau ada; fallback ke inisial) =====
           Container(
             width: 58,
             height: 58,
@@ -79,18 +87,17 @@ class RunaraHeader extends StatelessWidget {
               border: Border.all(color: Colors.white24, width: 2),
             ),
             clipBehavior: Clip.antiAlias,
-            child: Image.asset(
-              'assets/avatar.png',
+            child: (photoUrl != null && photoUrl!.isNotEmpty)
+                ? Image.network(
+              photoUrl!,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
-                color: kRunaraDivider,
-                alignment: Alignment.center,
-                child: Text(
-                  userName.isNotEmpty ? userName[0].toUpperCase() : '?',
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ),
+              // fallback ke inisial jika error load
+              errorBuilder: (_, __, ___) => _InitialAvatar(userName: userName),
+              // shimmer sederhana saat loading
+              loadingBuilder: (ctx, child, progress) =>
+              progress == null ? child : Container(color: kRunaraDivider),
+            )
+                : _InitialAvatar(userName: userName),
           ),
           const SizedBox(width: 12),
 
@@ -100,71 +107,123 @@ class RunaraHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  Text(greeting, style: const TextStyle(
-                      color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                  Text(
+                    greeting,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
                   const SizedBox(width: 6),
                   Text(emoji, style: const TextStyle(fontSize: 16)),
                 ]),
                 const SizedBox(height: 4),
-                Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
-                  Text(userName, style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16, height: 1.1)),
-                  const SizedBox(width: 6),
-                  _Badge(text: roleLabel),
-                ]),
+                Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      userName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                        height: 1.1,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    _Badge(text: roleLabel),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 Row(children: [
                   const Icon(Icons.shield_moon, size: 16, color: kRunaraSubtle),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Stack(children: [
-                      Container(height: 8, decoration: BoxDecoration(
-                          color: Colors.white12, borderRadius: BorderRadius.circular(20))),
+                      Container(
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: Colors.white12,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                      ),
                       LayoutBuilder(
                         builder: (ctx, c) => Container(
                           height: 8,
                           width: c.maxWidth * progress.clamp(0, 1),
                           decoration: BoxDecoration(
-                              color: kRunaraAccent, borderRadius: BorderRadius.circular(20)),
+                            color: kRunaraAccent,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
                         ),
                       ),
                     ]),
                   ),
                   const SizedBox(width: 10),
-                  Text('LV.$level', style: const TextStyle(
-                      color: kRunaraSubtle, fontWeight: FontWeight.w700)),
+                  Text(
+                    'LV.$level',
+                    style: const TextStyle(
+                        color: kRunaraSubtle, fontWeight: FontWeight.w700),
+                  ),
                 ]),
               ],
             ),
           ),
 
           const SizedBox(width: 10),
-          // bell
-          InkWell(
-            onTap: onTapBell,
-            borderRadius: BorderRadius.circular(12),
-            child: Stack(clipBehavior: Clip.none, children: [
-              Container(
-                width: 36, height: 36,
-                decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12)),
-                child: const Icon(Icons.notifications_none, color: Colors.white),
-              ),
-              if (hasUnread)
-                Positioned(
-                  right: -3, top: -3,
-                  child: Container(
-                    width: 14, height: 14,
-                    decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
+
+          // tombol kanan: gunakan trailing jika ada; jika tidak, bel notifikasi default
+          trailing ??
+              InkWell(
+                onTap: onTapBell,
+                borderRadius: BorderRadius.circular(12),
+                child: Stack(clipBehavior: Clip.none, children: [
+                  Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      color: Colors.white10,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.notifications_none, color: Colors.white),
                   ),
-                ),
-            ]),
-          ),
+                  if (hasUnread)
+                    Positioned(
+                      right: -3, top: -3,
+                      child: Container(
+                        width: 14, height: 14,
+                        decoration: const BoxDecoration(
+                            color: Colors.redAccent, shape: BoxShape.circle),
+                      ),
+                    ),
+                ]),
+              ),
         ],
       ),
     );
   }
 }
 
+/// Fallback avatar huruf-inisial
+class _InitialAvatar extends StatelessWidget {
+  final String userName;
+  const _InitialAvatar({required this.userName});
+  @override
+  Widget build(BuildContext context) {
+    final ch = (userName.isNotEmpty ? userName[0] : '?').toUpperCase();
+    return Container(
+      color: kRunaraDivider,
+      alignment: Alignment.center,
+      child: Text(
+        ch,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 22,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+/// ====== SECTION PEMBALUT HEADER (padding/top spacing seragam)
 class RunaraHeaderSection extends StatelessWidget {
   final String greeting;
   final String emoji;
@@ -174,6 +233,11 @@ class RunaraHeaderSection extends StatelessWidget {
   final double progress;
   final bool hasUnread;
   final VoidCallback onTapBell;
+  /// Forward `trailing` ke RunaraHeader untuk mengganti tombol kanan header pada halaman tertentu.
+  final Widget? trailing;
+
+  /// ⬇️ Baru: forward `photoUrl` ke RunaraHeader
+  final String? photoUrl;
 
   const RunaraHeaderSection({
     super.key,
@@ -185,6 +249,8 @@ class RunaraHeaderSection extends StatelessWidget {
     required this.progress,
     required this.hasUnread,
     required this.onTapBell,
+    this.trailing,
+    this.photoUrl, // <-- baru
   });
 
   @override
@@ -204,6 +270,8 @@ class RunaraHeaderSection extends StatelessWidget {
         progress: progress,
         hasUnread: hasUnread,
         onTapBell: onTapBell,
+        trailing: trailing,
+        photoUrl: photoUrl, // <-- forward ke header
       ),
     );
   }
@@ -216,9 +284,15 @@ class _Badge extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: const Color(0xFF3A4C86), borderRadius: BorderRadius.circular(8)),
-      child: Text(text, style: const TextStyle(
-          color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, height: 1.1)),
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A4C86),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+            color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800, height: 1.1),
+      ),
     );
   }
 }
@@ -261,7 +335,8 @@ class RunaraNotificationSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final maxH = MediaQuery.of(context).size.height * 0.9;
     final hasWelcomeUnread = notifs.any(
-            (n) => !n.read && n.title.toLowerCase().contains('selamat datang'));
+          (n) => !n.read && n.title.toLowerCase().contains('selamat datang'),
+    );
 
     return SafeArea(
       child: ConstrainedBox(
@@ -272,14 +347,22 @@ class RunaraNotificationSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               // drag handle
-              Container(width: 44, height: 5,
-                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(3))),
+              Container(
+                width: 44, height: 5,
+                decoration: BoxDecoration(
+                    color: Colors.white24, borderRadius: BorderRadius.circular(3)),
+              ),
               const SizedBox(height: 12),
 
               // header
               Row(children: [
-                const Expanded(child: Text('Notifikasi', style: TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16))),
+                const Expanded(
+                  child: Text(
+                    'Notifikasi',
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
+                  ),
+                ),
                 TextButton(
                   onPressed: () {
                     onMarkAllRead();
@@ -308,11 +391,15 @@ class RunaraNotificationSheet extends StatelessWidget {
                 )
                     : ListView.separated(
                   itemCount: notifs.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white12),
+                  separatorBuilder: (_, __) =>
+                  const Divider(height: 1, color: Colors.white12),
                   itemBuilder: (ctx, i) {
                     final n = notifs[i];
-                    final icon = n.read ? Icons.notifications_none : Icons.circle_notifications;
-                    final color = n.read ? Colors.white60 : kRunaraAccent;
+                    final icon = n.read
+                        ? Icons.notifications_none
+                        : Icons.circle_notifications;
+                    final color =
+                    n.read ? Colors.white60 : kRunaraAccent;
 
                     return ListTile(
                       onTap: () {
@@ -327,9 +414,15 @@ class RunaraNotificationSheet extends StatelessWidget {
                           fontWeight: n.read ? FontWeight.w600 : FontWeight.w800,
                         ),
                       ),
-                      subtitle: Text(n.body, style: const TextStyle(color: kRunaraSubtle)),
-                      trailing: Text(_fmtTime(n.time),
-                          style: const TextStyle(color: kRunaraSubtle, fontSize: 12)),
+                      subtitle: Text(
+                        n.body,
+                        style: const TextStyle(color: kRunaraSubtle),
+                      ),
+                      trailing: Text(
+                        _fmtTime(n.time),
+                        style: const TextStyle(
+                            color: kRunaraSubtle, fontSize: 12),
+                      ),
                     );
                   },
                 ),
@@ -358,27 +451,71 @@ class _WelcomeBanner extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
           gradient: const LinearGradient(
-              colors: [Color(0xFF5B6CFF), Color(0xFF9AA6FF)],
-              begin: Alignment.topLeft, end: Alignment.bottomRight),
+            colors: [Color(0xFF5B6CFF), Color(0xFF9AA6FF)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
           boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10)],
         ),
         padding: const EdgeInsets.all(14),
         child: const Row(
           children: [
             CircleAvatar(
-                radius: 22, backgroundColor: Colors.white24,
-                child: Text('🎉', style: TextStyle(fontSize: 20))),
+              radius: 22,
+              backgroundColor: Colors.white24,
+              child: Text('🎉', style: TextStyle(fontSize: 20)),
+            ),
             SizedBox(width: 12),
             Expanded(
               child: Text(
                 'Selamat datang di RUNARA!\nKetuk untuk melihat semua fitur.',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, height: 1.2),
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.w800, height: 1.2),
               ),
             ),
             Icon(Icons.chevron_right, color: Colors.white),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// ====== NOTIFICATION CENTER (default list + helper)
+class RunaraNotificationCenter {
+  // Default isi notifikasi yang disimpan di sini
+  static final List<AppNotification> notifs = [
+    AppNotification(
+      title: 'Selamat Datang 🎉',
+      body: 'Terima kasih sudah bergabung di RUNARA!',
+      time: DateTime.now().subtract(const Duration(minutes: 5)),
+      read: false, // biar muncul badge merah & banner sambutan
+    ),
+    AppNotification(
+      title: 'Tips Hari Ini 💡',
+      body: 'Coba pemanasan 5 menit sebelum berlari.',
+      time: DateTime.now().subtract(const Duration(hours: 2)),
+      read: true,
+    ),
+    AppNotification(
+      title: 'Jadwal Mendatang',
+      body: 'Pendampingan Jumat 06:20 di GBK. Siapkan perlengkapan ya!',
+      time: DateTime.now().subtract(const Duration(days: 1, hours: 1)),
+      read: false,
+    ),
+  ];
+
+  static bool get hasUnread => notifs.any((n) => !n.read);
+
+  /// Buka sheet notifikasi dan kembalikan `true` jika ada perubahan
+  static Future<bool?> open(BuildContext context) {
+    return RunaraNotificationSheet.show(
+      context,
+      notifs: notifs,
+      onMarkAllRead: () {
+        for (final n in notifs) n.read = true;
+      },
+      onTapItem: (i) => notifs[i].read = true,
     );
   }
 }

@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
 
     <application
         android:label="apps_runara"
@@ -61,6 +63,11 @@
 
     <!-- Opsional: queries -->
     <queries>
+            <package android:name="id.dana" />
+            <package android:name="com.tokopedia.tkpd" />
+            <package android:name="com.shopee.app" />
+            <package android:name="ovo.id" />
+            <package android:name="com.gojek.app" />
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT" />
             <data android:mimeType="text/plain" />

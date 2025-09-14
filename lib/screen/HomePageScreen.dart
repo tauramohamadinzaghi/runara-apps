@@ -1,23 +1,34 @@
 // lib/screen/HomePageScreen.dart
+import 'package:apps_runara/screen/AktivitasRiwayatPageScreen.dart';
 import 'package:apps_runara/screen/MapsPageScreen.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'BantuanPageScreen.dart';
 import 'PesanPageScreen.dart';
+import 'package:firebase_messaging/firebase_messaging.dart'; // pastikan impor ini ada di file
+
 // >>> ADDED
 import 'package:url_launcher/url_launcher.dart';
 import 'package:apps_runara/sos_bus.dart';
 // >>> ADDED: for StreamSubscription
 import 'dart:async';
 
+// >>> ADDED: lokasi & reverse-geocoding
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 
 import 'ChooseRoleScreen.dart';
 import 'TunanetraPageScreen.dart';
+import 'TipsPageScreen.dart';
+import 'DonasiPageScreen.dart';
+import 'package:apps_runara/screen/SettingsPageScreen.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 
 // nav & header reusable
 import 'widget/runara_thin_nav.dart';
-import 'widget/runara_header.dart'; // RunaraHeaderSection, RunaraHeader, RunaraNotificationSheet, AppNotification
+import 'widget/runara_header.dart'; // RunaraHeaderSection, runaraGreetingIndo, runaraGreetingEmoji, RunaraNotificationSheet, AppNotification
 import 'package:apps_runara/screen/CariPendampingPageScreen.dart';
 import 'auth_service.dart';
 
@@ -74,9 +85,6 @@ class _HomePageScreenState extends State<HomePageScreen> {
   }
 }
 
-// >>> ADDED: SOS event subscription
-StreamSubscription<SosPayload>? _sosSub;
-
 /// =================== MODEL & HELPER ===================
 enum UserRole { relawan, tunanetra }
 
@@ -108,23 +116,7 @@ class UserProfile {
   String get roleLabel => role == UserRole.relawan ? 'Relawan' : 'Tunanetra';
 }
 
-
-String greetingIndo(DateTime now) {
-  final h = now.hour;
-  if (h >= 5 && h < 11) return 'Selamat pagi';
-  if (h >= 11 && h < 15) return 'Selamat siang';
-  if (h >= 15 && h < 18) return 'Selamat sore';
-  return 'Selamat malam';
-}
-
-String greetingEmoji(DateTime now) {
-  final h = now.hour;
-  if (h >= 5 && h < 11) return '☀️';
-  if (h >= 11 && h < 15) return '🌤️';
-  if (h >= 15 && h < 18) return '🌇';
-  return '🌙';
-}
-
+// (hapus greetingIndo & greetingEmoji lokal — pakai dari runara_header.dart)
 String formatKcal(double v) => v <= 0 ? '–' : '${v.toStringAsFixed(0)} Kcal';
 String formatKm(double v) => v <= 0 ? '–' : '${v.toStringAsFixed(1)} Km';
 
@@ -166,8 +158,9 @@ class _HomePageState extends State<HomePage> {
   int sessionsPerWeek = 2;
   DateTime selectedDate = DateTime.now();
 
-  final List<AppNotification> _notifs = []; // dari runara_header.dart
-  bool get _hasUnread => _notifs.any((n) => !n.read);
+// AFTER:
+  List<AppNotification> get _notifs => RunaraNotificationCenter.notifs;
+  bool get _hasUnread => RunaraNotificationCenter.hasUnread;
 
   // ===== Quick Feature (untuk “Kustomisasi Fitur”)
   static const _quickKey = 'quick_priority_ids';
@@ -225,33 +218,24 @@ class _HomePageState extends State<HomePage> {
     return list;
   }
 
+  late final StreamSubscription<SosPayload>? _sosSub;
+
   @override
   void initState() {
     super.initState();
     selectedDate = DateTime.now();
     _initUserThenNotifications();
-    @override
-    void initState() {
-      super.initState();
-      selectedDate = DateTime.now();
-      SosBus.ensureFcmReady(); // >>> ADDED: minta izin + subscribe topic 'sos'
-      _initUserThenNotifications();
-      _sosSub = SosBus.stream.listen((p) {
-        // Saat ada SOS masuk, buka pop-out yang sudah kamu buat
-        SosBus.showSosSheet(context);
-        _sosSub = SosBus.stream.listen(_onSos);
-      });
-    };
+    // HAPUS baris ini:
+    // _sosSub = SosBus.stream.listen((p) { if (mounted) _showIncomingSos(p); });
   }
 
-// >>> ADDED
   @override
   void dispose() {
     _sosSub?.cancel();
     super.dispose();
   }
 
-// << TAMBAH: buka Google Maps
+  // << TAMBAH: buka Google Maps (opsional, masih disimpan bila perlu)
   Future<void> _openMaps({double? lat, double? lng, String address = ''}) async {
     Uri uri;
     if (lat != null && lng != null) {
@@ -266,86 +250,241 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-// << TAMBAH: tampilkan pop-out permintaan bantuan
-  void _onSos(SosPayload p) {
-    if (!mounted) return;
+  // >>> ADDED: izin & lokasi sekarang
+  Future<Position?> _getCurrentPosition() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location service dimatikan. Aktifkan dulu.')),
+      );
+      return null;
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.deniedForever ||
+        permission == LocationPermission.denied) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Izin lokasi ditolak.')),
+      );
+      return null;
+    }
+
+    return Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+  }
+
+  Future<String> _reverseAddress(double lat, double lng) async {
+    try {
+      final list = await placemarkFromCoordinates(lat, lng);
+      if (list.isEmpty) return '';
+      final p = list.first;
+      final parts = [
+        (p.street ?? '').trim(),
+        (p.subLocality ?? '').trim(),
+        (p.locality ?? '').trim(),
+      ].where((e) => e.isNotEmpty).toList();
+      return parts.join(', ');
+    } catch (_) {
+      return '';
+    }
+  }
+
+  // >>> ADDED: composer SOS (khusus Tunanetra)
+  void _openSosComposer() {
+    final auth = FirebaseAuth.instance.currentUser;
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF0D1B3D), // _bgBlue look
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0D1B3D),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(99)),
+              ),
+              const SizedBox(height: 14),
+              const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 64),
+              const SizedBox(height: 10),
+              const Text('Permintaan Bantuan Segera',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18)),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: const Color(0xFF2A3B8E),
+                    backgroundImage: (auth?.photoURL != null) ? NetworkImage(auth!.photoURL!) : null,
+                    child: (auth?.photoURL == null) ? const Icon(Icons.person, color: Colors.white) : null,
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      // role chip
+                      _ChipTiny(text: 'Tunanetra'),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: const Icon(Icons.sos_rounded),
+                  label: const Text('Kirim SOS Sekarang', style: TextStyle(fontWeight: FontWeight.w800)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.redAccent,
+                    foregroundColor: Colors.white,
+                    shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    await _sendSos();
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Lokasi terkini Anda akan dikirim ke Relawan terdekat.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _sendSos() async {
+    if (user?.role != UserRole.tunanetra) return;
+
+    final auth = FirebaseAuth.instance.currentUser;
+    final pos = await _getCurrentPosition();
+    if (pos == null) return;
+
+    final addr = await _reverseAddress(pos.latitude, pos.longitude);
+
+    await SosBus.sendSos(
+      name: user?.name ?? (auth?.displayName ?? 'Tunanetra'),
+      role: 'Tunanetra',
+      address: addr,
+      lat: pos.latitude,
+      lng: pos.longitude,
+    );
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('SOS dikirim. Menunggu Relawan…')),
+    );
+  }
+
+  // >>> ADDED: pop-out masuk untuk Relawan + ke MapsPageScreen
+  void _showIncomingSos(SosPayload p) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0D1B3D),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
         return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 18, 16, 20),
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(width: 40, height: 4,
                 decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(99)),
               ),
-              const SizedBox(height: 14),
-              const Icon(Icons.report_rounded, color: Colors.redAccent, size: 56),
-              const SizedBox(height: 10),
+              const SizedBox(height: 12),
+              const Icon(Icons.report_gmailerrorred_rounded, color: Colors.redAccent, size: 64),
+              const SizedBox(height: 8),
               const Text(
                 'Permintaan Bantuan Segera',
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
-                textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 14),
-
-              // avatar + role + nama
+              const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const CircleAvatar(radius: 22, backgroundColor: Color(0xFF2A3B8E), child: Icon(Icons.person,color: Colors.white)),
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: const Color(0xFF2A3B8E),
+                    backgroundImage: (p.photoUrl != null) ? NetworkImage(p.photoUrl!) : null,
+                    child: (p.photoUrl == null) ? const Icon(Icons.person, color: Colors.white) : null,
+                  ),
                   const SizedBox(width: 10),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(color: const Color(0xFF2A3B8E), borderRadius: BorderRadius.circular(999)),
-                        child: Text(p.role, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
-                      ),
+                      _ChipTiny(text: p.role),
                       const SizedBox(height: 4),
                       Text(p.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
                     ],
                   ),
                 ],
               ),
-
               const SizedBox(height: 12),
-
-              // alamat tebal
               Text(
-                p.address.isEmpty ? 'Lokasi tidak diketahui' : p.address,
+                (p.address.isEmpty && p.lat != null && p.lng != null)
+                    ? '${p.lat!.toStringAsFixed(5)}, ${p.lng!.toStringAsFixed(5)}'
+                    : (p.address.isEmpty ? 'Lokasi tidak diketahui' : p.address),
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
               ),
-
               const SizedBox(height: 16),
-
-              // tombol arahkan lokasi
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  icon: const Icon(Icons.location_on_outlined, size: 18),
+                  icon: const Icon(Icons.location_pin),
+                  label: const Text('Arahkan Lokasi', style: TextStyle(fontWeight: FontWeight.w800)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.redAccent,
                     foregroundColor: Colors.white,
                     shape: const StadiumBorder(),
                     padding: const EdgeInsets.symmetric(vertical: 12),
-                    textStyle: const TextStyle(fontWeight: FontWeight.w800),
                   ),
-                  onPressed: () => _openMaps(lat: p.lat, lng: p.lng, address: p.address),
-                  label: const Text('Arahkan Lokasi'),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _openMapsPage(p);
+                  },
                 ),
               ),
             ],
           ),
         );
       },
+    );
+  }
+
+  void _openMapsPage(SosPayload p) {
+    if (p.lat == null || p.lng == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Lokasi pengirim tidak tersedia.')),
+      );
+      return;
+    }
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => MapsPageScreen(
+          targetLat: p.lat!,
+          targetLng: p.lng!,
+          targetName: p.name,
+          targetAddress: p.address,
+        ),
+      ),
     );
   }
 
@@ -364,7 +503,20 @@ class _HomePageState extends State<HomePage> {
     final role = roleStr == 'tunanetra' ? UserRole.tunanetra : UserRole.relawan;
     user = UserProfile(name: name, role: role, level: 0, xp: 0);
 
-    // load quick features (jika ada) + SANITIZE + default fallback
+    if (user?.role == UserRole.relawan) {
+      // Dengarkan event SOS hanya untuk Relawan
+      _sosSub = SosBus.stream.listen((p) {
+        if (mounted) _showIncomingSos(p);
+      });
+
+      // Pastikan perangkat Relawan berlangganan topik 'sos'
+      try {
+        await FirebaseMessaging.instance.requestPermission(alert: true, badge: true, sound: true);
+        await FirebaseMessaging.instance.subscribeToTopic('sos');
+      } catch (_) {}
+    }
+
+    // load & sanitize quick features
     final loaded = prefs.getStringList(_quickKey);
     if (loaded == null || loaded.isEmpty) {
       _quickIds = List<String>.from(_defaultQuickIds);
@@ -377,51 +529,7 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    final seenKey = 'seen_welcome_${u?.uid ?? 'local'}';
-    final meta = u?.metadata;
-    final isNewSignUp = meta != null &&
-        meta.creationTime != null &&
-        meta.lastSignInTime != null &&
-        meta.creationTime!.millisecondsSinceEpoch ==
-            meta.lastSignInTime!.millisecondsSinceEpoch;
-
-    if (isNewSignUp && !(prefs.getBool(seenKey) ?? false)) {
-      _notifs.add(AppNotification(
-        title: 'Selamat datang 🎉',
-        body: 'Halo $name, terima kasih telah bergabung di RUNARA. Yuk eksplor fitur dan mulai terhubung!',
-        time: DateTime.now(),
-        read: false,
-      ));
-      await prefs.setBool(seenKey, true);
-    }
-
-    _seedDemoNotifications();
     if (mounted) setState(() {});
-  }
-
-  void _seedDemoNotifications() {
-    if (_notifs.isEmpty) {
-      _notifs.addAll([
-        AppNotification(
-          title: 'Tips Hari Ini 💡',
-          body: 'Coba pemanasan 5 menit sebelum berlari.',
-          time: DateTime.now().subtract(const Duration(hours: 2)),
-          read: true,
-        ),
-        AppNotification(
-          title: 'Jadwal Mendatang',
-          body: 'Pendampingan Jumat 06:20 di GBK. Siapkan perlengkapan ya!',
-          time: DateTime.now().subtract(const Duration(days: 1, hours: 1)),
-          read: false,
-        ),
-        AppNotification(
-          title: 'Misi Selesai ✅',
-          body: 'Kamu menyelesaikan 3 sesi minggu ini. Mantap! +30 XP',
-          time: DateTime.now().subtract(const Duration(days: 2)),
-          read: true,
-        ),
-      ]);
-    }
   }
 
   void _pickSessions() {}
@@ -445,17 +553,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ⬇️ gunakan sheet reusable dari runara_header.dart
+  // AFTER (cukup panggil helper dari header):
   Future<void> _openNotifications() async {
-    final changed = await RunaraNotificationSheet.show(
-      context,
-      notifs: _notifs,
-      onMarkAllRead: () {
-        for (final n in _notifs) n.read = true;
-      },
-      onTapItem: (i) => _notifs[i].read = true,
-
-    );
-    if (changed == true && mounted) setState(() {});
+    await RunaraNotificationCenter.open(context);
+    if (mounted) setState(() {}); // refresh badge kalau ada perubahan
   }
 
   // ======== state untuk Icon Navigation (aktif index) — 0 = "Semua"
@@ -478,13 +579,42 @@ class _HomePageState extends State<HomePage> {
           MaterialPageRoute(builder: (_) => const PesanPageScreen()),
         );
         break;
+      case 'tips':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const TipsPageScreen()),
+        );
+        break;
+      case 'donation':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const DonasiPageScreen()),
+        );
+        break;
+
+      case 'history':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const RiwayatAktivitasPageScreen()),
+        );
+        break;
+
+      case 'settings':
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const SettingsPageScreen()),
+        );
+        break;
+
+    // >>> ADDED: SOS hanya untuk Tunanetra
       case 'sos':
-        SosBus.showSosSheet(context); // >>> ADDED: buka pop-out & kirim SOS
+        if (user?.role == UserRole.tunanetra) {
+          _openSosComposer();
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Hanya Tunanetra yang bisa mengirim SOS.')),
+          );
+        }
         break;
 
     // Contoh lain (kalau nanti ada halamannya):
     // case 'messages': Navigator.pushNamed(context, '/messages'); break;
-
       default:
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -551,6 +681,7 @@ class _HomePageState extends State<HomePage> {
     final kcalText = formatKcal(totalCalories);
     final kmText = formatKm(totalDistance);
     final u = user;
+    final auth = FirebaseAuth.instance.currentUser;
 
     // map id -> FeatureDef (pertahankan urutan _quickIds)
     List<FeatureDef> _mapIdsToFeatures(List<String> ids) {
@@ -590,17 +721,18 @@ class _HomePageState extends State<HomePage> {
             bottom: false,
             child: CustomScrollView(
               slivers: [
-                // ===== Header seragam via wrapper =====
+                // ===== Header seragam via wrapper (pakai runara_header.dart)
                 SliverToBoxAdapter(
                   child: RunaraHeaderSection(
-                    greeting: greetingIndo(DateTime.now()),
-                    emoji: greetingEmoji(DateTime.now()),
+                    greeting: runaraGreetingIndo(DateTime.now()),
+                    emoji: runaraGreetingEmoji(DateTime.now()),
                     userName: u?.name ?? '—',
                     roleLabel: u?.roleLabel ?? 'Relawan',
                     level: u?.shownLevel ?? 0,
                     progress: u?.progress ?? 0,
                     hasUnread: _hasUnread,
                     onTapBell: _openNotifications,
+                    photoUrl: auth?.photoURL, // ✅ ini yang pakai foto akun
                   ),
                 ),
 
@@ -647,19 +779,18 @@ class _HomePageState extends State<HomePage> {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
                     child: _FeatureIconNav(
-    features: selectedFeatures,
-    activeIndex: navActive,
-    onTap: (i) {
-    if (i == 0) {
-    _openAllFeatures();                 // buka sheet "Semua"
-    } else {
-    _openFeature(selectedFeatures[i - 1]); // langsung navigate sesuai fitur
-    }
+                      features: selectedFeatures,
+                      activeIndex: navActive,
+                      onTap: (i) {
+                        if (i == 0) {
+                          _openAllFeatures();                 // buka sheet "Semua"
+                        } else {
+                          _openFeature(selectedFeatures[i - 1]); // langsung navigate sesuai fitur
+                        }
                       },
                     ),
                   ),
                 ),
-
 
                 // ===== Stats
                 SliverToBoxAdapter(
@@ -744,6 +875,9 @@ class _HomePageState extends State<HomePage> {
     );
   }
 }
+
+/* ====== sisa class & widget di bawah ini tidak terkait header,
+   dipertahankan apa adanya ====== */
 
 class _FeatureIconNav extends StatelessWidget {
   final List<FeatureDef> features; // List of dynamic features
@@ -859,7 +993,6 @@ class _IconTile extends StatelessWidget {
     );
   }
 }
-
 
 /* =========================================================================
    KUSTOMISASI FITUR — Bottom Sheet (tanpa status bar dekoratif)
@@ -1442,7 +1575,6 @@ class _ScheduleHeaderRow extends StatelessWidget {
         ),
       ],
     );
-
   }
 }
 
@@ -1857,7 +1989,6 @@ class _MonthCalendarSheetState extends State<_MonthCalendarSheet> {
                       crossAxisSpacing: 8,
                     ),
                     itemCount: leadingEmpty + daysInMonth,
-
                     itemBuilder: (context, index) {
                       if (index < leadingEmpty) return const SizedBox.shrink();
                       final day = index - leadingEmpty + 1;
@@ -1955,11 +2086,12 @@ class _AllFeaturesSheet extends StatelessWidget {
               childAspectRatio: 0.9,
             ),
             itemCount: features.length,
-    itemBuilder: (context, i) {
-    final feature = features[i];
-    return _AllFeatureTile(
-    feature: feature,
-    onTap: () => onTap(feature));
+            itemBuilder: (context, i) {
+              final feature = features[i];
+              return _AllFeatureTile(
+                feature: feature,
+                onTap: () => onTap(feature),
+              );
             },
           ),
         ),
@@ -1967,7 +2099,6 @@ class _AllFeaturesSheet extends StatelessWidget {
     );
   }
 }
-
 
 class _AllFeatureTile extends StatelessWidget {
   final FeatureDef feature;
@@ -2031,186 +2162,16 @@ class _AllFeatureTile extends StatelessWidget {
   }
 }
 
-// >>> ADDED: Emergency pop-out sheet (sesuai HTML versi Flutter)
-class _EmergencySheet extends StatelessWidget {
-  final String name;
-  final String role;
-  final String address;
-  final VoidCallback onNavigate;
-
-  const _EmergencySheet({
-    required this.name,
-    required this.role,
-    required this.address,
-    required this.onNavigate,
-  });
-
+// ===== util kecil untuk chip role =====
+class _ChipTiny extends StatelessWidget {
+  final String text;
+  const _ChipTiny({required this.text});
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
-      color: Colors.transparent,
-      child: Center(
-        child: Container(
-          width: 360,
-          decoration: BoxDecoration(
-            color: const Color(0xFF001957),
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 20)],
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Red triangle warning icon (bigger)
-              SizedBox(
-                width: 96,
-                height: 96,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Transform.rotate(
-                      angle: 0,
-                      child: CustomPaint(
-                        size: const Size(92, 92),
-                        painter: _TrianglePainter(color: const Color(0xFFFF2D2D)),
-                      ),
-                    ),
-                    const Text(
-                      '!',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 42,
-                        fontWeight: FontWeight.w900,
-                        height: 1,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              const Text(
-                'Permintaan Bantuan Segera',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 16,
-                ),
-              ),
-              const SizedBox(height: 14),
-              // Avatar + name/role
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 56,
-                    height: 56,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF2A3B8E),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.person, color: Colors.white, size: 30),
-                  ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        role.isEmpty ? '—' : role,
-                        style: const TextStyle(
-                          color: Color(0xFFFFDD00),
-                          fontWeight: FontWeight.w800,
-                          fontSize: 12,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        name.isEmpty ? '—' : name,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              // Address
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.place_rounded, color: Colors.white, size: 18),
-                  const SizedBox(width: 6),
-                  Flexible(
-                    child: Text(
-                      address.isEmpty ? '—' : address,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              // CTA buttons
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Cancel
-                  TextButton.icon(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, color: Colors.white),
-                    label: const Text(
-                      'Tutup',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  // Navigate
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF2D2D),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      textStyle: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    onPressed: onNavigate,
-                    icon: const Icon(Icons.map_rounded, size: 18),
-                    label: const Text('Arahkan Lokasi'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: const Color(0xFF2A3B8E), borderRadius: BorderRadius.circular(999)),
+      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
     );
   }
-}
-
-// >>> ADDED: painter untuk segitiga merah
-class _TrianglePainter extends CustomPainter {
-  final Color color;
-  _TrianglePainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color;
-    final path = Path()
-      ..moveTo(size.width / 2, 0)
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
-      ..close();
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _TrianglePainter oldDelegate) => oldDelegate.color != color;
 }

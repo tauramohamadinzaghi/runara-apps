@@ -5,7 +5,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.9.0
+  sdk: ^3.9.2
 
 dependencies:
   flutter:
@@ -28,9 +28,13 @@ dependencies:
   shared_preferences: ^2.2.3
   firebase_messaging: ^15.2.10
   flutter_local_notifications: ^17.2.1
+  webview_flutter: ^4.8.0
+  geocoding: any
+
 
   firebase_storage: ^12.4.10  # Updated to resolve the conflict
   image_picker: ^0.8.5+3     # Ensure you are using the latest null-safe version
+  firebase_app_check: ^0.3.2+10
 
 dev_dependencies:
   flutter_test:

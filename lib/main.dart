@@ -1,7 +1,11 @@
+import 'package:apps_runara/screen/HubungkanPageScreen.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:apps_runara/sos_bus.dart';
 
 // === Auth Service (untuk init Google Sign-In) ===
 import 'screen/auth_service.dart';
@@ -20,6 +24,8 @@ import 'screen/CariPendampingPageScreen.dart';
 import 'screen/verifyphonescreen.dart';
 import 'push_setup.dart'; // <<< ADD
 import 'dart:async';                 // << TAMBAH
+import 'screen/HubungkanPageScreen.dart';
+
 
 
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -28,6 +34,11 @@ final navigatorKey = GlobalKey<NavigatorState>();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  // DEV cepat: debug token
+  await FirebaseAppCheck.instance.activate(
+    androidProvider: AndroidProvider.debug, // ganti PlayIntegrity untuk release
+    appleProvider: AppleProvider.debug,
+  );
   await initPush(); // <<< ADD
 
   // ===== W A J I B untuk google_sign_in v7 =====
@@ -82,6 +93,9 @@ class MyApp extends StatelessWidget {
 
           case '/maps':
             return MaterialPageRoute(builder: (_) => const MapsPageScreen());
+
+          case '/hubungkan':
+            return MaterialPageRoute(builder: (_) => const HubungkanPageScreen());
 
           case '/profile':
             return MaterialPageRoute(builder: (_) => const ProfilePageScreen());
@@ -167,4 +181,19 @@ class _RoleGate extends StatelessWidget {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('user_role_$uid');
   }
+}
+
+void setupSosListener() {
+  FirebaseMessaging.onMessage.listen((RemoteMessage m) {
+    final d = m.data;
+    SosPayload p = SosPayload(
+      name: d['name'] ?? '',
+      role: d['role'] ?? 'Tunanetra',
+      address: d['address'] ?? '',
+      lat: (d['lat'] != null) ? double.tryParse('${d['lat']}') : null,
+      lng: (d['lng'] != null) ? double.tryParse('${d['lng']}') : null,
+    );
+    // kirim ke in-app stream → hanya Relawan yang sudah subscribe akan menampilkan sheet
+    SosBus.emit(p);
+  });
 }
